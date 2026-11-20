@@ -7,7 +7,10 @@ $adventure = Join-Path $auth '.tools/velocity.jar'
 $classes = Join-Path $PSScriptRoot 'build/classes'
 $testClasses = Join-Path $PSScriptRoot 'build/test-classes'
 New-Item -ItemType Directory -Force -Path $testClasses | Out-Null
-& "$jdk/javac.exe" -encoding UTF-8 -cp "$classes;$api;$adventure" -d $testClasses (Join-Path $PSScriptRoot 'src/test/java/ru/prostominecraft/end/TestEndState.java')
+$tests = @(Get-ChildItem (Join-Path $PSScriptRoot 'src/test/java') -Recurse -Filter '*.java' | ForEach-Object FullName)
+& "$jdk/javac.exe" -encoding UTF-8 -cp "$classes;$api;$adventure" -d $testClasses $tests
 if ($LASTEXITCODE -ne 0) { throw 'Test compilation failed.' }
 & "$jdk/java.exe" -cp "$classes;$testClasses;$api;$adventure" ru.prostominecraft.end.TestEndState
 if ($LASTEXITCODE -ne 0) { throw 'End state test failed.' }
+& "$jdk/java.exe" -cp "$classes;$testClasses;$api;$adventure" ru.prostominecraft.end.TestFightPlan
+if ($LASTEXITCODE -ne 0) { throw 'Fight plan test failed.' }

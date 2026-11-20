@@ -6,6 +6,7 @@ import java.util.UUID;
 import net.kyori.adventure.audience.Audience;
 import net.kyori.adventure.bossbar.BossBar;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
@@ -26,6 +27,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.inventory.PrepareItemCraftEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
@@ -41,6 +43,13 @@ public final class EndPlugin extends JavaPlugin implements Listener {
     private NamespacedKey sealKey;
     private EndState state;
     private BossBar openingBar;
+    private BossBar reminderBar;
+    private long reminderUntil;
+    private long nextReminder;
+    private final java.util.Map<UUID, Long> boundaryWarnings = new java.util.concurrent.ConcurrentHashMap<>();
+    private EndFight fight;
+    private EndCrafting crafting;
+    private EndItems items;
     private long lastAnnouncedMinute = -1;
 
     @Override
@@ -51,8 +60,15 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         state.load();
         if (state.corrupt()) getLogger().severe("End state.yml is unreadable; End opening remains locked.");
         for (Seal seal : Seal.values()) seal.registerRecipe(this);
+        items = new EndItems(this);
+        fight = new EndFight(this, state, items);
+        crafting = new EndCrafting(this, items);
+        crafting.registerRecipes();
         Bukkit.getPluginManager().registerEvents(this, this);
+        Bukkit.getPluginManager().registerEvents(fight, this);
+        Bukkit.getPluginManager().registerEvents(crafting, this);
         Bukkit.getGlobalRegionScheduler().runAtFixedRate(this, task -> tickOpening(), 20L, 20L);
+        forPlayers(this::trackPlayer);
         getLogger().info("End foundation loaded; seal submission enabled=" + openingEnabled());
     }
 
@@ -202,28 +218,60 @@ public final class EndPlugin extends JavaPlugin implements Listener {
             event.setCancelled(true);
             ((Audience) event.getPlayer()).sendMessage(Component.text("Энд запечатан. Откройте /end.", NamedTextColor.LIGHT_PURPLE));
         }
+        if (!event.isCancelled() && event.getTo() != null && beyondFirstFightBoundary(event.getTo())) {
+            event.setCancelled(true);
+            ((Audience) event.getPlayer()).sendMessage(Component.text("За пределами острова пока действует барьер Края.", NamedTextColor.LIGHT_PURPLE));
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    public void onMove(PlayerMoveEvent event) {
+        if (!event.hasChangedBlock() || !beyondFirstFightBoundary(event.getTo())) return;
+        event.setTo(event.getFrom());
+        long now = System.currentTimeMillis();
+        long previous = boundaryWarnings.getOrDefault(event.getPlayer().getUniqueId(), 0L);
+        if (now - previous >= 3000) {
+            boundaryWarnings.put(event.getPlayer().getUniqueId(), now);
+            ((Audience) event.getPlayer()).sendMessage(Component.text("Барьер Края удерживает Вас у центрального острова.", NamedTextColor.LIGHT_PURPLE));
+        }
+    }
+
+    private boolean beyondFirstFightBoundary(org.bukkit.Location point) {
+        if (!state.opened() || state.firstFightComplete() || point.getWorld().getEnvironment() != World.Environment.THE_END) return false;
+        double radius = getConfig().getDouble("first-fight.outer-island-barrier-radius", 300);
+        return point.getX() * point.getX() + point.getZ() * point.getZ() > radius * radius;
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onNaturalRegen(EntityRegainHealthEvent event) {
         if (!getConfig().getBoolean("end-debuff.enabled", true) || event.getRegainReason() != EntityRegainHealthEvent.RegainReason.SATIATED) return;
         if (event.getEntity() instanceof Player player && player.getWorld().getEnvironment() == World.Environment.THE_END)
-            event.setAmount(event.getAmount() * getConfig().getDouble("end-debuff.satiated-regen-multiplier", 0.5));
+            event.setAmount(event.getAmount() * (1 - (1 - getConfig().getDouble("end-debuff.satiated-regen-multiplier", 0.5))
+                * (1 - Math.min(1, items.armorReduction(player) + crafting.brewReduction(player)))));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onExhaustion(EntityExhaustionEvent event) {
         if (!getConfig().getBoolean("end-debuff.enabled", true)) return;
         if (event.getEntity() instanceof Player player && player.getWorld().getEnvironment() == World.Environment.THE_END)
-            event.setExhaustion((float) (event.getExhaustion() * getConfig().getDouble("end-debuff.exhaustion-multiplier", 1.5)));
+            event.setExhaustion((float) (event.getExhaustion() * (1 + (getConfig().getDouble("end-debuff.exhaustion-multiplier", 1.5) - 1)
+                * (1 - Math.min(1, items.armorReduction(player) + crafting.brewReduction(player))))));
     }
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         if (openingBar != null) event.getPlayer().showBossBar(openingBar);
+        if (reminderBar != null) event.getPlayer().showBossBar(reminderBar);
+        trackPlayer(event.getPlayer());
+        event.getPlayer().getScheduler().runDelayed(this, task -> fight.deliver(event.getPlayer()), () -> {}, 20L);
+    }
+
+    private void trackPlayer(Player player) {
+        player.getScheduler().runAtFixedRate(this, task -> fight.updatePosition(player), () -> {}, 1L, 20L);
     }
 
     private void tickOpening() {
+        tickReminder();
         if (!openingEnabled() || state.opened() || state.openingAt() == 0) return;
         long now = System.currentTimeMillis();
         try {
@@ -256,7 +304,26 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private void announce(Component message) { forPlayers(player -> ((Audience) player).sendMessage(message)); }
+    private void tickReminder() {
+        long now = System.currentTimeMillis();
+        if (reminderBar != null && now >= reminderUntil) {
+            BossBar old = reminderBar;
+            reminderBar = null;
+            forPlayers(player -> player.hideBossBar(old));
+        }
+        if (!openingEnabled() || state.firstFightComplete() || state.openingAt() != 0 && !state.opened()) return;
+        if (nextReminder == 0) nextReminder = now + 15 * 60_000L;
+        if (now < nextReminder) return;
+        nextReminder = now + Math.max(1, getConfig().getInt("end-opening.reminder.interval-minutes", 15)) * 60_000L;
+        String message = state.opened() ? "Край открыт. Исследуйте центральный остров." : "Край запечатан: " + state.count() + "/6 печатей.";
+        reminderBar = BossBar.bossBar(Component.text(message, NamedTextColor.LIGHT_PURPLE), 1, BossBar.Color.PURPLE, BossBar.Overlay.PROGRESS);
+        reminderUntil = now + Math.max(1, getConfig().getInt("end-opening.reminder.bossbar-duration-seconds", 10)) * 1000L;
+        forPlayers(player -> player.showBossBar(reminderBar));
+        if (getConfig().getBoolean("end-opening.reminder.send-chat-message", true))
+            announce(Component.text(message + " Открыть /end", NamedTextColor.LIGHT_PURPLE).clickEvent(ClickEvent.runCommand("/end")));
+    }
+
+    void announce(Component message) { forPlayers(player -> ((Audience) player).sendMessage(message)); }
 
     private void forPlayers(java.util.function.Consumer<Player> action) {
         for (Player player : Bukkit.getOnlinePlayers()) {

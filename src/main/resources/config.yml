@@ -2,7 +2,16 @@ end-opening:
   # Keep disabled until the three-dragon encounter and rewards are implemented.
   enabled: false
   countdown-seconds: 300
+  reminder:
+    interval-minutes: 15
+    bossbar-duration-seconds: 10
+    send-chat-message: true
 end-debuff:
   enabled: true
   satiated-regen-multiplier: 0.50
   exhaustion-multiplier: 1.50
+  chorus-brew:
+    duration-seconds: 600
+    reduction: 0.50
+first-fight:
+  outer-island-barrier-radius: 300

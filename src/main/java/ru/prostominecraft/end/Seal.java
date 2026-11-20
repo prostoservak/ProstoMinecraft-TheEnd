@@ -40,6 +40,7 @@ enum Seal {
             Component.text(ingredients.get(1), NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)
         ));
         meta.getPersistentDataContainer().set(plugin.sealKey(), PersistentDataType.STRING, name());
+        meta.setItemModel(new NamespacedKey("prostoservak", "seal_" + name().toLowerCase()));
         item.setItemMeta(meta);
         return item;
     }

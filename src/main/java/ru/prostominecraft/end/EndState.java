@@ -7,8 +7,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.EnumMap;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.configuration.InvalidConfigurationException;
 
@@ -18,6 +22,14 @@ final class EndState {
     private boolean opened;
     private long openingAt;
     private boolean corrupt;
+    private boolean firstFightComplete;
+    private int wave;
+    private final Map<UUID, List<String>> pendingRewards = new HashMap<>();
+    private UUID repeatDragonId;
+    private DragonKind repeatKind;
+    private DragonKind lastRepeatKind;
+    private boolean repeatEmpowered;
+    private final Map<UUID, Boolean> portalCrystals = new HashMap<>();
 
     EndState(Path file) {
         this.file = file;
@@ -29,6 +41,14 @@ final class EndState {
         opened = false;
         openingAt = 0;
         corrupt = false;
+        firstFightComplete = false;
+        wave = 0;
+        pendingRewards.clear();
+        repeatDragonId = null;
+        repeatKind = null;
+        lastRepeatKind = null;
+        repeatEmpowered = false;
+        portalCrystals.clear();
         if (Files.exists(file)) {
             try { yaml.load(file.toFile()); }
             catch (IOException | InvalidConfigurationException error) {
@@ -45,6 +65,31 @@ final class EndState {
         }
         opened = yaml.getBoolean("opened", false);
         openingAt = Math.max(0L, yaml.getLong("opening-at", 0L));
+        firstFightComplete = yaml.getBoolean("first-fight-complete", false);
+        wave = Math.max(0, Math.min(2, yaml.getInt("wave", 0)));
+        if (yaml.isConfigurationSection("pending-rewards")) {
+            for (String rawId : yaml.getConfigurationSection("pending-rewards").getKeys(false)) {
+                try { pendingRewards.put(UUID.fromString(rawId), new ArrayList<>(yaml.getStringList("pending-rewards." + rawId))); }
+                catch (IllegalArgumentException ignored) { }
+            }
+        }
+        try {
+            String id = yaml.getString("repeat.dragon-id");
+            repeatDragonId = id == null ? null : UUID.fromString(id);
+            String kind = yaml.getString("repeat.kind");
+            repeatKind = kind == null ? null : DragonKind.valueOf(kind);
+            String last = yaml.getString("repeat.last-kind");
+            lastRepeatKind = last == null ? null : DragonKind.valueOf(last);
+            repeatEmpowered = yaml.getBoolean("repeat.empowered", false);
+        } catch (IllegalArgumentException error) {
+            corrupt = true;
+        }
+        if (yaml.isConfigurationSection("portal-crystals")) {
+            for (String rawId : yaml.getConfigurationSection("portal-crystals").getKeys(false)) {
+                try { portalCrystals.put(UUID.fromString(rawId), yaml.getBoolean("portal-crystals." + rawId)); }
+                catch (IllegalArgumentException ignored) { corrupt = true; }
+            }
+        }
     }
 
     synchronized boolean submit(Seal seal, UUID player, String name, long now, int countdownSeconds) throws IOException {
@@ -77,11 +122,124 @@ final class EndState {
     synchronized boolean opened() { return opened; }
     synchronized long openingAt() { return openingAt; }
     synchronized boolean corrupt() { return corrupt; }
+    synchronized boolean firstFightComplete() { return firstFightComplete; }
+    synchronized int wave() { return wave; }
+
+    synchronized void advanceWave() throws IOException {
+        if (firstFightComplete || wave >= 2) throw new IllegalStateException("No further first-fight wave");
+        int previous = wave;
+        wave++;
+        try { save(); }
+        catch (IOException error) { wave = previous; throw error; }
+    }
+
+    synchronized void finishFirstFight() throws IOException {
+        if (firstFightComplete) return;
+        firstFightComplete = true;
+        try { save(); }
+        catch (IOException error) { firstFightComplete = false; throw error; }
+    }
+
+    synchronized void queueRewards(Map<UUID, List<String>> rewards, boolean firstFight) throws IOException {
+        Map<UUID, List<String>> previous = new HashMap<>();
+        for (var entry : pendingRewards.entrySet()) previous.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+        boolean oldComplete = firstFightComplete;
+        UUID oldDragonId = repeatDragonId;
+        DragonKind oldKind = repeatKind;
+        DragonKind oldLastKind = lastRepeatKind;
+        boolean oldEmpowered = repeatEmpowered;
+        for (var entry : rewards.entrySet()) pendingRewards.computeIfAbsent(entry.getKey(), ignored -> new ArrayList<>()).addAll(entry.getValue());
+        if (firstFight) firstFightComplete = true;
+        else {
+            lastRepeatKind = repeatKind;
+            repeatDragonId = null;
+            repeatKind = null;
+            repeatEmpowered = false;
+        }
+        try { save(); }
+        catch (IOException error) {
+            pendingRewards.clear(); pendingRewards.putAll(previous);
+            firstFightComplete = oldComplete;
+            repeatDragonId = oldDragonId;
+            repeatKind = oldKind;
+            lastRepeatKind = oldLastKind;
+            repeatEmpowered = oldEmpowered;
+            throw error;
+        }
+    }
+
+    synchronized void recordPortalCrystal(UUID id, boolean empowered) throws IOException {
+        Boolean old = portalCrystals.put(id, empowered);
+        try { save(); }
+        catch (IOException error) {
+            if (old == null) portalCrystals.remove(id); else portalCrystals.put(id, old);
+            throw error;
+        }
+    }
+
+    synchronized void forgetPortalCrystal(UUID id) throws IOException {
+        Boolean old = portalCrystals.remove(id);
+        if (old == null) return;
+        try { save(); }
+        catch (IOException error) { portalCrystals.put(id, old); throw error; }
+    }
+
+    synchronized DragonKind beginRepeat(UUID dragonId) throws IOException {
+        if (!firstFightComplete) throw new IllegalStateException("First fight is not complete");
+        if (dragonId.equals(repeatDragonId) && repeatKind != null) return repeatKind;
+        UUID oldId = repeatDragonId;
+        DragonKind oldKind = repeatKind;
+        boolean oldEmpowered = repeatEmpowered;
+        Map<UUID, Boolean> oldCrystals = new HashMap<>(portalCrystals);
+        DragonKind[] options = DragonKind.values();
+        DragonKind next;
+        do { next = options[ThreadLocalRandom.current().nextInt(options.length)]; }
+        while (next == lastRepeatKind && options.length > 1);
+        repeatDragonId = dragonId;
+        repeatKind = next;
+        repeatEmpowered = portalCrystals.size() == 4 && portalCrystals.values().stream().allMatch(Boolean::booleanValue);
+        portalCrystals.clear();
+        try { save(); }
+        catch (IOException error) {
+            repeatDragonId = oldId;
+            repeatKind = oldKind;
+            repeatEmpowered = oldEmpowered;
+            portalCrystals.putAll(oldCrystals);
+            throw error;
+        }
+        return next;
+    }
+
+    synchronized DragonKind repeatKind() { return repeatKind; }
+    synchronized boolean repeatEmpowered() { return repeatEmpowered; }
+
+    synchronized List<String> pendingRewards(UUID id) {
+        return List.copyOf(pendingRewards.getOrDefault(id, List.of()));
+    }
+
+    synchronized void acknowledgeReward(UUID id, String reward) throws IOException {
+        List<String> entries = pendingRewards.get(id);
+        if (entries == null || !entries.remove(reward)) return;
+        if (entries.isEmpty()) pendingRewards.remove(id);
+        try { save(); }
+        catch (IOException error) {
+            pendingRewards.computeIfAbsent(id, ignored -> new ArrayList<>()).add(reward);
+            throw error;
+        }
+    }
 
     private void save() throws IOException {
         YamlConfiguration yaml = new YamlConfiguration();
         yaml.set("opened", opened);
         yaml.set("opening-at", openingAt);
+        yaml.set("first-fight-complete", firstFightComplete);
+        yaml.set("wave", wave);
+        yaml.set("repeat.dragon-id", repeatDragonId == null ? null : repeatDragonId.toString());
+        yaml.set("repeat.kind", repeatKind == null ? null : repeatKind.name());
+        yaml.set("repeat.last-kind", lastRepeatKind == null ? null : lastRepeatKind.name());
+        yaml.set("repeat.empowered", repeatEmpowered);
+        for (var entry : portalCrystals.entrySet()) yaml.set("portal-crystals." + entry.getKey(), entry.getValue());
+        for (var entry : pendingRewards.entrySet()) yaml.set("pending-rewards." + entry.getKey(), entry.getValue());
         for (var entry : submitted.entrySet()) {
             String path = "submitted." + entry.getKey().name();
             yaml.set(path + ".id", entry.getValue().id().toString());
