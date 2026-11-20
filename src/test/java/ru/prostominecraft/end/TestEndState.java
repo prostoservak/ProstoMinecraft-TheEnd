@@ -27,11 +27,18 @@ public final class TestEndState {
         reopened.advanceWave();
         reopened.advanceWave();
         UUID winner = UUID.randomUUID();
+        reopened.saveFightProgress(Map.of(winner, 123.5), 3);
+        EndState fightRestored = new EndState(path);
+        fightRestored.load();
+        if (fightRestored.fightMaxPlayers() != 3 || fightRestored.fightContribution().get(winner) != 123.5)
+            throw new AssertionError("fight progress must survive restart");
         reopened.queueRewards(Map.of(winner, List.of("dragon_scale:60", "void_needle:1")), true);
         EndState rewarded = new EndState(path);
         rewarded.load();
         if (!rewarded.firstFightComplete() || rewarded.wave() != 2 || rewarded.pendingRewards(winner).size() != 2)
             throw new AssertionError("fight and offline rewards must survive reload");
+        if (!rewarded.fightContribution().isEmpty() || rewarded.fightMaxPlayers() != 1)
+            throw new AssertionError("fight progress must clear after rewards");
         rewarded.acknowledgeReward(winner, "dragon_scale:60");
         EndState acknowledged = new EndState(path);
         acknowledged.load();

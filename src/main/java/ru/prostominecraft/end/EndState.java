@@ -31,6 +31,8 @@ final class EndState {
     private boolean repeatEmpowered;
     private final Map<UUID, Boolean> portalCrystals = new HashMap<>();
     private boolean borderExpanded;
+    private final Map<UUID, Double> fightContribution = new HashMap<>();
+    private int fightMaxPlayers = 1;
 
     EndState(Path file) {
         this.file = file;
@@ -51,6 +53,8 @@ final class EndState {
         repeatEmpowered = false;
         portalCrystals.clear();
         borderExpanded = false;
+        fightContribution.clear();
+        fightMaxPlayers = 1;
         if (Files.exists(file)) {
             try { yaml.load(file.toFile()); }
             catch (IOException | InvalidConfigurationException error) {
@@ -70,6 +74,15 @@ final class EndState {
         firstFightComplete = yaml.getBoolean("first-fight-complete", false);
         wave = Math.max(0, Math.min(2, yaml.getInt("wave", 0)));
         borderExpanded = yaml.getBoolean("border-expanded", false);
+        fightMaxPlayers = Math.max(1, yaml.getInt("fight.max-players", 1));
+        if (yaml.isConfigurationSection("fight.contribution")) {
+            for (String rawId : yaml.getConfigurationSection("fight.contribution").getKeys(false)) {
+                try {
+                    double value = yaml.getDouble("fight.contribution." + rawId);
+                    if (Double.isFinite(value) && value > 0) fightContribution.put(UUID.fromString(rawId), value);
+                } catch (IllegalArgumentException ignored) { corrupt = true; }
+            }
+        }
         if (yaml.isConfigurationSection("pending-rewards")) {
             for (String rawId : yaml.getConfigurationSection("pending-rewards").getKeys(false)) {
                 try { pendingRewards.put(UUID.fromString(rawId), new ArrayList<>(yaml.getStringList("pending-rewards." + rawId))); }
@@ -151,6 +164,8 @@ final class EndState {
         DragonKind oldKind = repeatKind;
         DragonKind oldLastKind = lastRepeatKind;
         boolean oldEmpowered = repeatEmpowered;
+        Map<UUID, Double> oldContribution = new HashMap<>(fightContribution);
+        int oldPlayers = fightMaxPlayers;
         for (var entry : rewards.entrySet()) pendingRewards.computeIfAbsent(entry.getKey(), ignored -> new ArrayList<>()).addAll(entry.getValue());
         if (firstFight) firstFightComplete = true;
         else {
@@ -159,6 +174,8 @@ final class EndState {
             repeatKind = null;
             repeatEmpowered = false;
         }
+        fightContribution.clear();
+        fightMaxPlayers = 1;
         try { save(); }
         catch (IOException error) {
             pendingRewards.clear(); pendingRewards.putAll(previous);
@@ -167,6 +184,8 @@ final class EndState {
             repeatKind = oldKind;
             lastRepeatKind = oldLastKind;
             repeatEmpowered = oldEmpowered;
+            fightContribution.putAll(oldContribution);
+            fightMaxPlayers = oldPlayers;
             throw error;
         }
     }
@@ -194,6 +213,8 @@ final class EndState {
         DragonKind oldKind = repeatKind;
         boolean oldEmpowered = repeatEmpowered;
         Map<UUID, Boolean> oldCrystals = new HashMap<>(portalCrystals);
+        Map<UUID, Double> oldContribution = new HashMap<>(fightContribution);
+        int oldPlayers = fightMaxPlayers;
         DragonKind[] options = DragonKind.values();
         DragonKind next;
         do { next = options[ThreadLocalRandom.current().nextInt(options.length)]; }
@@ -202,19 +223,41 @@ final class EndState {
         repeatKind = next;
         repeatEmpowered = portalCrystals.size() == 4 && portalCrystals.values().stream().allMatch(Boolean::booleanValue);
         portalCrystals.clear();
+        fightContribution.clear();
+        fightMaxPlayers = 1;
         try { save(); }
         catch (IOException error) {
             repeatDragonId = oldId;
             repeatKind = oldKind;
             repeatEmpowered = oldEmpowered;
             portalCrystals.putAll(oldCrystals);
+            fightContribution.putAll(oldContribution);
+            fightMaxPlayers = oldPlayers;
             throw error;
         }
         return next;
     }
 
     synchronized DragonKind repeatKind() { return repeatKind; }
+    synchronized UUID repeatDragonId() { return repeatDragonId; }
     synchronized boolean repeatEmpowered() { return repeatEmpowered; }
+    synchronized Map<UUID, Double> fightContribution() { return Map.copyOf(fightContribution); }
+    synchronized int fightMaxPlayers() { return fightMaxPlayers; }
+
+    synchronized void saveFightProgress(Map<UUID, Double> contribution, int maxPlayers) throws IOException {
+        if (fightContribution.equals(contribution) && fightMaxPlayers == maxPlayers) return;
+        Map<UUID, Double> old = new HashMap<>(fightContribution);
+        int oldMax = fightMaxPlayers;
+        fightContribution.clear();
+        fightContribution.putAll(contribution);
+        fightMaxPlayers = Math.max(1, maxPlayers);
+        try { save(); }
+        catch (IOException error) {
+            fightContribution.clear(); fightContribution.putAll(old);
+            fightMaxPlayers = oldMax;
+            throw error;
+        }
+    }
     synchronized boolean borderExpanded() { return borderExpanded; }
 
     synchronized void markBorderExpanded() throws IOException {
@@ -246,6 +289,8 @@ final class EndState {
         yaml.set("first-fight-complete", firstFightComplete);
         yaml.set("wave", wave);
         yaml.set("border-expanded", borderExpanded);
+        yaml.set("fight.max-players", fightMaxPlayers);
+        for (var entry : fightContribution.entrySet()) yaml.set("fight.contribution." + entry.getKey(), entry.getValue());
         yaml.set("repeat.dragon-id", repeatDragonId == null ? null : repeatDragonId.toString());
         yaml.set("repeat.kind", repeatKind == null ? null : repeatKind.name());
         yaml.set("repeat.last-kind", lastRepeatKind == null ? null : lastRepeatKind.name());

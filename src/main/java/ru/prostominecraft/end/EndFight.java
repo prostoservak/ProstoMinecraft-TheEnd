@@ -45,11 +45,15 @@ final class EndFight implements Listener {
     private int bastionCrystalsDestroyed;
     private final Map<UUID, Boolean> delivering = new ConcurrentHashMap<>();
     private final Set<UUID> countedCrystals = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> trackedDragons = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, Long> blockExplosionUntil = new ConcurrentHashMap<>();
 
     EndFight(EndPlugin plugin, EndState state, EndItems items) {
         this.plugin = plugin;
         this.state = state;
         this.items = items;
+        contribution.putAll(state.fightContribution());
+        maxPlayersSeen = state.fightMaxPlayers();
     }
 
     void updatePosition(Player player) {
@@ -97,9 +101,28 @@ final class EndFight implements Listener {
     public void onDragonAdded(EntityAddToWorldEvent event) {
         if (!(event.getEntity() instanceof EnderDragon dragon) || !state.opened() || state.corrupt()) return;
         if (event.getWorld().getEnvironment() != World.Environment.THE_END) return;
+        attach(dragon);
+    }
+
+    void attachExisting() {
+        if (!state.opened() || state.corrupt()) return;
+        for (World world : Bukkit.getWorlds()) {
+            if (world.getEnvironment() != World.Environment.THE_END) continue;
+            var battle = world.getEnderDragonBattle();
+            EnderDragon dragon = battle == null ? null : battle.getEnderDragon();
+            if (dragon != null) attach(dragon);
+        }
+    }
+
+    private void attach(EnderDragon dragon) {
+        if (!trackedDragons.add(dragon.getUniqueId())) return;
         dragon.getScheduler().run(plugin, task -> {
             if (state.firstFightComplete()) {
-                try { state.beginRepeat(dragon.getUniqueId()); }
+                try {
+                    boolean fresh = !dragon.getUniqueId().equals(state.repeatDragonId());
+                    state.beginRepeat(dragon.getUniqueId());
+                    if (fresh) { contribution.clear(); maxPlayersSeen = 1; }
+                }
                 catch (IOException error) {
                     dragon.setInvulnerable(true);
                     plugin.getLogger().severe("Cannot persist repeat dragon selection: " + error);
@@ -107,11 +130,15 @@ final class EndFight implements Listener {
                 }
             }
             configure(dragon, true);
-        }, () -> {});
+        }, () -> trackedDragons.remove(dragon.getUniqueId()));
         final int[] seconds = {0};
         final long[] emptySince = {0};
         dragon.getScheduler().runAtFixedRate(plugin, task -> {
-            if (!dragon.isValid() || dragon.isDead()) { task.cancel(); return; }
+            if (!dragon.isValid() || dragon.isDead()) {
+                trackedDragons.remove(dragon.getUniqueId());
+                task.cancel();
+                return;
+            }
             int count = nearbyPlayers();
             if (count == 0 && !transitioning.containsKey(dragon.getUniqueId())) {
                 if (emptySince[0] == 0) emptySince[0] = System.currentTimeMillis();
@@ -129,8 +156,15 @@ final class EndFight implements Listener {
                     dragon.setHealth(Math.max(1, Math.min(desired, desired * ratio)));
                 }
             }
-            if (count > 0 && !transitioning.containsKey(dragon.getUniqueId())) runAbility(dragon, ++seconds[0]);
+            seconds[0]++;
+            if (count > 0 && !transitioning.containsKey(dragon.getUniqueId())) runAbility(dragon, seconds[0]);
+            if (seconds[0] % 5 == 0) persistProgress();
         }, () -> {}, 20L, 20L);
+    }
+
+    private void persistProgress() {
+        try { state.saveFightProgress(contribution, maxPlayersSeen); }
+        catch (IOException error) { plugin.getLogger().severe("Cannot persist End fight progress: " + error); }
     }
 
     private void runAbility(EnderDragon dragon, int seconds) {
@@ -228,6 +262,15 @@ final class EndFight implements Listener {
     public void onDragonDamage(EntityDamageEvent event) {
         if (!(event.getEntity() instanceof EnderDragon dragon) || !state.opened() || state.corrupt()) return;
         if (transitioning.containsKey(dragon.getUniqueId())) { event.setCancelled(true); return; }
+        if (event.getCause() == EntityDamageEvent.DamageCause.BLOCK_EXPLOSION) {
+            long now = System.currentTimeMillis();
+            if (now < blockExplosionUntil.getOrDefault(dragon.getUniqueId(), 0L)) {
+                event.setCancelled(true);
+                return;
+            }
+            blockExplosionUntil.put(dragon.getUniqueId(), now + 10_000L);
+            event.setDamage(Math.min(12.0, event.getDamage()));
+        }
         if (kind() == DragonKind.BASTION && event instanceof EntityDamageByEntityEvent byEntity
             && byEntity.getDamager() instanceof Projectile) {
             double resist = Math.max(0, 0.40 - 0.05 * bastionCrystalsDestroyed);
@@ -241,7 +284,10 @@ final class EndFight implements Listener {
         if (state.firstFightComplete() || damage < dragon.getHealth() - 1) return;
         if (state.wave() >= 2) return;
         event.setCancelled(true);
-        try { state.advanceWave(); }
+        try {
+            state.saveFightProgress(contribution, maxPlayersSeen);
+            state.advanceWave();
+        }
         catch (IOException error) {
             plugin.getLogger().severe("Cannot persist End wave transition: " + error);
             return;

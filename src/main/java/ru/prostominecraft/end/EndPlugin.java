@@ -76,6 +76,7 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         Bukkit.getPluginManager().registerEvents(artifacts, this);
         Bukkit.getPluginManager().registerEvents(seepage, this);
         Bukkit.getGlobalRegionScheduler().runAtFixedRate(this, task -> tickOpening(), 20L, 20L);
+        Bukkit.getGlobalRegionScheduler().runDelayed(this, task -> fight.attachExisting(), 40L);
         forPlayers(this::trackPlayer);
         getLogger().info("End foundation loaded; seal submission enabled=" + openingEnabled());
     }
@@ -290,6 +291,7 @@ public final class EndPlugin extends JavaPlugin implements Listener {
                 if (openingBar != null) forPlayers(player -> player.hideBossBar(openingBar));
                 openingBar = null;
                 announce(Component.text("Печати Края разрушены. Энд открыт!", NamedTextColor.LIGHT_PURPLE));
+                fight.attachExisting();
                 return;
             }
         } catch (IOException error) {
