@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/handheld",
+  "textures": {
+    "layer0": "prostoservak:item/void_needle_depleted"
+  }
+}

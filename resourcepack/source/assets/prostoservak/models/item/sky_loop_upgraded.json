@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "prostoservak:item/sky_loop_upgraded"
+  }
+}

@@ -1,0 +1,10 @@
+name: ProstoMinecraft-End
+version: '0.1.0-dev'
+main: ru.prostominecraft.end.EndPlugin
+api-version: '26.3'
+folia-supported: true
+description: Shared End seals and End dimension rules
+commands:
+  end:
+    description: Show the six End seals
+    aliases: [endseals]
