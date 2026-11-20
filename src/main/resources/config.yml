@@ -6,6 +6,9 @@ end-opening:
     interval-minutes: 15
     bossbar-duration-seconds: 10
     send-chat-message: true
+  seepage-before-first-kill:
+    enabled: true
+    bed-interrupt-chance: 0.30
 end-debuff:
   enabled: true
   satiated-regen-multiplier: 0.50
@@ -15,3 +18,4 @@ end-debuff:
     reduction: 0.50
 first-fight:
   outer-island-barrier-radius: 300
+  overworld-border-bonus: 256

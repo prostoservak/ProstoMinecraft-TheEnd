@@ -30,6 +30,7 @@ final class EndState {
     private DragonKind lastRepeatKind;
     private boolean repeatEmpowered;
     private final Map<UUID, Boolean> portalCrystals = new HashMap<>();
+    private boolean borderExpanded;
 
     EndState(Path file) {
         this.file = file;
@@ -49,6 +50,7 @@ final class EndState {
         lastRepeatKind = null;
         repeatEmpowered = false;
         portalCrystals.clear();
+        borderExpanded = false;
         if (Files.exists(file)) {
             try { yaml.load(file.toFile()); }
             catch (IOException | InvalidConfigurationException error) {
@@ -67,6 +69,7 @@ final class EndState {
         openingAt = Math.max(0L, yaml.getLong("opening-at", 0L));
         firstFightComplete = yaml.getBoolean("first-fight-complete", false);
         wave = Math.max(0, Math.min(2, yaml.getInt("wave", 0)));
+        borderExpanded = yaml.getBoolean("border-expanded", false);
         if (yaml.isConfigurationSection("pending-rewards")) {
             for (String rawId : yaml.getConfigurationSection("pending-rewards").getKeys(false)) {
                 try { pendingRewards.put(UUID.fromString(rawId), new ArrayList<>(yaml.getStringList("pending-rewards." + rawId))); }
@@ -212,6 +215,14 @@ final class EndState {
 
     synchronized DragonKind repeatKind() { return repeatKind; }
     synchronized boolean repeatEmpowered() { return repeatEmpowered; }
+    synchronized boolean borderExpanded() { return borderExpanded; }
+
+    synchronized void markBorderExpanded() throws IOException {
+        if (borderExpanded) return;
+        borderExpanded = true;
+        try { save(); }
+        catch (IOException error) { borderExpanded = false; throw error; }
+    }
 
     synchronized List<String> pendingRewards(UUID id) {
         return List.copyOf(pendingRewards.getOrDefault(id, List.of()));
@@ -234,6 +245,7 @@ final class EndState {
         yaml.set("opening-at", openingAt);
         yaml.set("first-fight-complete", firstFightComplete);
         yaml.set("wave", wave);
+        yaml.set("border-expanded", borderExpanded);
         yaml.set("repeat.dragon-id", repeatDragonId == null ? null : repeatDragonId.toString());
         yaml.set("repeat.kind", repeatKind == null ? null : repeatKind.name());
         yaml.set("repeat.last-kind", lastRepeatKind == null ? null : lastRepeatKind.name());

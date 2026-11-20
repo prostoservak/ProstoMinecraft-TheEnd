@@ -45,6 +45,10 @@ public final class TestEndState {
             throw new AssertionError("repeat fight must survive reload");
         resumed.queueRewards(Map.of(), false);
         if (resumed.beginRepeat(UUID.randomUUID()) == firstRepeat) throw new AssertionError("repeat should avoid preceding kind");
+        resumed.markBorderExpanded();
+        EndState borderRestored = new EndState(path);
+        borderRestored.load();
+        if (!borderRestored.borderExpanded()) throw new AssertionError("one-time world-border bonus state");
         Files.writeString(path, "opened: [broken");
         EndState corrupt = new EndState(path);
         corrupt.load();

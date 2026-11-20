@@ -50,6 +50,10 @@ public final class EndPlugin extends JavaPlugin implements Listener {
     private EndFight fight;
     private EndCrafting crafting;
     private EndItems items;
+    private EndArtifacts artifacts;
+    private EndSeepage seepage;
+    private boolean borderBonusPending;
+    private long lastBorderAttempt;
     private long lastAnnouncedMinute = -1;
 
     @Override
@@ -61,12 +65,16 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         if (state.corrupt()) getLogger().severe("End state.yml is unreadable; End opening remains locked.");
         for (Seal seal : Seal.values()) seal.registerRecipe(this);
         items = new EndItems(this);
+        artifacts = new EndArtifacts(this, items);
         fight = new EndFight(this, state, items);
         crafting = new EndCrafting(this, items);
+        seepage = new EndSeepage(this, state);
         crafting.registerRecipes();
         Bukkit.getPluginManager().registerEvents(this, this);
         Bukkit.getPluginManager().registerEvents(fight, this);
         Bukkit.getPluginManager().registerEvents(crafting, this);
+        Bukkit.getPluginManager().registerEvents(artifacts, this);
+        Bukkit.getPluginManager().registerEvents(seepage, this);
         Bukkit.getGlobalRegionScheduler().runAtFixedRate(this, task -> tickOpening(), 20L, 20L);
         forPlayers(this::trackPlayer);
         getLogger().info("End foundation loaded; seal submission enabled=" + openingEnabled());
@@ -268,10 +276,13 @@ public final class EndPlugin extends JavaPlugin implements Listener {
 
     private void trackPlayer(Player player) {
         player.getScheduler().runAtFixedRate(this, task -> fight.updatePosition(player), () -> {}, 1L, 20L);
+        player.getScheduler().runAtFixedRate(this, task -> artifacts.tick(player), () -> {}, 5L, 5L);
+        player.getScheduler().runAtFixedRate(this, task -> seepage.tick(player), () -> {}, 20L, 20L);
     }
 
     private void tickOpening() {
         tickReminder();
+        tickBorderBonus();
         if (!openingEnabled() || state.opened() || state.openingAt() == 0) return;
         long now = System.currentTimeMillis();
         try {
@@ -301,6 +312,36 @@ public final class EndPlugin extends JavaPlugin implements Listener {
                 lastAnnouncedMinute = marker;
                 announce(Component.text("Энд откроется через " + seconds + " секунд.", NamedTextColor.LIGHT_PURPLE));
             }
+        }
+    }
+
+    private void tickBorderBonus() {
+        if (!state.firstFightComplete() || state.borderExpanded() || borderBonusPending) return;
+        long now = System.currentTimeMillis();
+        if (now - lastBorderAttempt < 60_000) return;
+        lastBorderAttempt = now;
+        var borderPlugin = Bukkit.getPluginManager().getPlugin("ProstoMinecraft-Worldborder");
+        if (borderPlugin == null || !borderPlugin.isEnabled()) {
+            getLogger().warning("Worldborder plugin unavailable; End victory bonus pending.");
+            return;
+        }
+        borderBonusPending = true;
+        try {
+            Object response = borderPlugin.getClass().getMethod("expandForEndVictory", double.class)
+                .invoke(borderPlugin, getConfig().getDouble("first-fight.overworld-border-bonus", 256.0));
+            if (!(response instanceof java.util.concurrent.CompletableFuture<?> future)) throw new IllegalStateException("Worldborder API did not return a future");
+            future.whenComplete((success, error) -> Bukkit.getGlobalRegionScheduler().execute(this, () -> {
+                borderBonusPending = false;
+                if (error != null || !Boolean.TRUE.equals(success)) {
+                    getLogger().severe("End border bonus failed: " + (error == null ? "Worldborder limit" : error));
+                    return;
+                }
+                try { state.markBorderExpanded(); }
+                catch (IOException io) { getLogger().severe("Could not record End border bonus: " + io); }
+            }));
+        } catch (ReflectiveOperationException | IllegalStateException error) {
+            borderBonusPending = false;
+            getLogger().severe("Worldborder plugin lacks End bonus API: " + error);
         }
     }
 
