@@ -220,6 +220,7 @@ final class EndFight implements Listener {
             if (freshEncounter || !state.firstFightComplete()) {
                 setupWaveArena(dragon.getWorld(), kind());
             }
+            if (freshEncounter || !alreadyConfigured) announceArrival(dragon, kind());
         }, () -> trackedDragons.remove(dragon.getUniqueId()));
 
         final int[] seconds = {0};
@@ -352,7 +353,6 @@ final class EndFight implements Listener {
             world.playSound(impact, Sound.ENTITY_ENDER_DRAGON_GROWL, 2.5f, 0.6f);
             world.spawnParticle(Particle.CLOUD, impact, 90, 5.0, 2.0, 5.0, 0.08);
             world.spawnParticle(Particle.EXPLOSION, impact, 8, 3.0, 1.0, 3.0, 0);
-            for (var entry : near) sendActionBar(entry.getKey(), Component.text("УДАР ЧЕРЕЗ 2 СЕКУНДЫ", NamedTextColor.GOLD));
             dragon.getScheduler().runDelayed(plugin, task -> {
                 if (!dragon.isValid() || dragon.isDead()) return;
                 Location groundCenter = dragon.getLocation().clone();
@@ -420,7 +420,7 @@ final class EndFight implements Listener {
                         double dx = e.getValue().x - hit.getX();
                         double dz = e.getValue().z - hit.getZ();
                         if (dx * dx + dz * dz <= 3.5 * 3.5) {
-                            damagePlayer(e.getKey(), 7.0, 0.4, "Бомбардировка обломками", NamedTextColor.RED);
+                            damagePlayer(e.getKey(), 7.0, 0.4, null, NamedTextColor.RED);
                         }
                     }
                 }, 36L);
@@ -445,7 +445,7 @@ final class EndFight implements Listener {
                             player.setVelocity(away);
                             player.getWorld().playSound(player.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 1.4f, 0.75f);
                             player.getWorld().spawnParticle(Particle.CLOUD, player.getLocation(), 20, 0.7, 0.5, 0.7, 0.12);
-                            ((Audience) player).sendActionBar(Component.text("Шквал крыльев Бастиона сбрасывает Вас с башни!", NamedTextColor.RED));
+                            ((Audience) player).sendActionBar(Component.text("Бастион Края: Не высоко ли лезешь?", NamedTextColor.RED));
                         }, () -> {});
                     }
                 }
@@ -466,7 +466,6 @@ final class EndFight implements Listener {
             boolean airborne = !player.isOnGround()
                 && loc.clone().subtract(0, 0.6, 0).getBlock().isPassable();
             if (airborne) {
-                ((Audience) player).sendActionBar(Component.text("Вы перепрыгнули сейсмическую волну!", NamedTextColor.GREEN));
                 return;
             }
             double dmg = player.isBlocking() ? 8.0 * 0.3 : 8.0;
@@ -474,7 +473,6 @@ final class EndFight implements Listener {
             Vector push = loc.toVector().subtract(center.toVector()).setY(0);
             if (push.lengthSquared() < 0.01) push = new Vector(1, 0, 0);
             player.setVelocity(push.normalize().multiply(0.8).setY(0.42));
-            ((Audience) player).sendActionBar(Component.text("Сейсмический удар Бастиона!", NamedTextColor.RED));
         }, () -> {});
     }
 
@@ -483,7 +481,6 @@ final class EndFight implements Listener {
         // Give melee players a predictable opening instead of waiting for the vanilla AI to land.
         if (seconds % 30 == 6 && System.currentTimeMillis() >= mirageGroundedUntil) {
             groundMirage(dragon, 10_000L);
-            broadcastToArena(near, Component.text("Мираж Края приземляется у портала!", NamedTextColor.LIGHT_PURPLE));
         }
         // 1) Двойники-миражи на 65% и 30% HP
         if (!mirageSplit65Done && hpRatio <= 0.65) {
@@ -597,7 +594,7 @@ final class EndFight implements Listener {
                     double dx = e.getValue().x - vortex.getX();
                     double dz = e.getValue().z - vortex.getZ();
                     if (dx * dx + dz * dz <= 4.8 * 4.8) {
-                        damagePlayer(e.getKey(), 7.0, 0.3, "Взрыв Хорус-стяжки", NamedTextColor.DARK_PURPLE);
+                        damagePlayer(e.getKey(), 7.0, 0.3, "Мираж Края: Не всё, что тянет, спасает.", NamedTextColor.DARK_PURPLE);
                     }
                 }
             }, () -> {}, 50L);
@@ -639,7 +636,7 @@ final class EndFight implements Listener {
                 });
                 for (var e : activePlayers()) {
                     double dx = e.getValue().x - center.getX(), dz = e.getValue().z - center.getZ();
-                    if (dx * dx + dz * dz <= 25.0) damagePlayer(e.getKey(), 12.0, 0.35, "Разлом Миража", NamedTextColor.LIGHT_PURPLE);
+                    if (dx * dx + dz * dz <= 25.0) damagePlayer(e.getKey(), 12.0, 0.35, "Мираж Края: Реальность хрупка.", NamedTextColor.LIGHT_PURPLE);
                 }
             }, () -> {}, 50L);
         }
@@ -647,7 +644,7 @@ final class EndFight implements Listener {
 
     private void spawnMirageCopies(EnderDragon dragon, List<Map.Entry<UUID, PlayerPosition>> near) {
         clearMirageCopies(dragon.getWorld());
-        broadcastToArena(near, Component.text("Мираж Края создал двойников! Настоящий оставляет яркий фиолетовый шлейф!", NamedTextColor.LIGHT_PURPLE));
+        broadcastToArena(near, Component.text("Мираж Края создал двойников! Настоящий явно чем-то отличается...", NamedTextColor.LIGHT_PURPLE));
         World world = dragon.getWorld();
         Location base = dragon.getLocation();
         for (int i = 0; i < 2; i++) {
@@ -723,7 +720,7 @@ final class EndFight implements Listener {
             for (int i = 0; i < seeds; i++) {
                 UUID id = shuffled.get(i).getKey();
                 marked.add(id);
-                sendActionBar(id, Component.text("Призматический заряд на Вас — отойдите от союзников на 6 блоков!", NamedTextColor.AQUA));
+                sendActionBar(id, Component.text("Над Вашей головой сияет призма.", NamedTextColor.AQUA));
             }
             World world = dragon.getWorld();
             for (int pulse = 0; pulse < 3; pulse++) {
@@ -752,7 +749,7 @@ final class EndFight implements Listener {
                     while (!frontier.isEmpty()) {
                         List<UUID> nextFrontier = new ArrayList<>();
                         for (UUID curId : frontier) {
-                            damagePlayer(curId, hopDamage, 0.35, "Призматическая цепь", NamedTextColor.AQUA);
+                            damagePlayer(curId, hopDamage, 0.35, "Венец Края: Ваши судьбы связаны.", NamedTextColor.AQUA);
                             PlayerPosition curPos = positions.get(curId);
                             if (curPos == null) continue;
                             for (var cand : current) {
@@ -779,7 +776,7 @@ final class EndFight implements Listener {
         // 3) Луч маяка: one moving display wall, with no lingering particle trail.
         if (seconds % 24 == 12) {
             World world = dragon.getWorld();
-            broadcastToArena(near, Component.text("Венец Края запускает Луч маяка! Бегите по кругу или прячьтесь за башнями!", NamedTextColor.AQUA));
+            broadcastToArena(near, Component.text("Луч края!", NamedTextColor.AQUA));
             double startAngle = ThreadLocalRandom.current().nextDouble(Math.PI * 2);
             Location origin = new Location(world, 0.5, 62.0, 0.5);
             clearCrownBeam();
@@ -826,7 +823,7 @@ final class EndFight implements Listener {
             PlayerPosition target = near.get(ThreadLocalRandom.current().nextInt(near.size())).getValue();
             World world = dragon.getWorld();
             Location center = new Location(world, target.x, target.y + 0.4, target.z);
-            broadcastToArena(near, Component.text("Венец призывает падение кристалла! Уходите от голубого круга!", NamedTextColor.AQUA));
+            broadcastToArena(near, Component.text("Венец призывает падение кристалла!", NamedTextColor.AQUA));
             for (int pulse = 0; pulse < 5; pulse++) {
                 final int charge = pulse;
                 dragon.getScheduler().runDelayed(plugin, t -> Bukkit.getRegionScheduler().run(plugin, center, rt -> {
@@ -847,7 +844,7 @@ final class EndFight implements Listener {
                 });
                 for (var e : activePlayers()) {
                     double dx = e.getValue().x - center.getX(), dz = e.getValue().z - center.getZ();
-                    if (dx * dx + dz * dz <= 36.0) damagePlayer(e.getKey(), 9.0, 0.3, "Падение кристалла", NamedTextColor.AQUA);
+                    if (dx * dx + dz * dz <= 36.0) damagePlayer(e.getKey(), 9.0, 0.3, "Венец Края: Свет настигнет каждого.", NamedTextColor.AQUA);
                 }
             }, () -> {}, 60L);
         }
@@ -873,7 +870,6 @@ final class EndFight implements Listener {
             beamHitUntil.put(id, now + 850L);
             player.damage(player.isBlocking() ? 2.0 : 4.0);
             player.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, eye, 12, 0.3, 0.4, 0.3, 0.05);
-            ((Audience) player).sendActionBar(Component.text("Луч маяка! Укройтесь за башней!", NamedTextColor.AQUA));
         }, () -> {});
     }
 
@@ -881,7 +877,7 @@ final class EndFight implements Listener {
         crownShielded = true;
         clearCrownCores();
         World world = dragon.getWorld();
-        broadcastToArena(near, Component.text("ПЕРЕГРУЗКА ЯДРА! Разбейте 3 Кристальных Средоточия у портала за 12 секунд!", NamedTextColor.GOLD));
+        broadcastToArena(near, Component.text("ПЕРЕГРУЗКА ЯДРА! Разбейте 3 Кристальных Средоточия у портала!", NamedTextColor.GOLD));
         Location hover = new Location(world, 0.5, 82.0, 0.5);
         dragon.teleportAsync(hover);
         dragon.setPhase(EnderDragon.Phase.HOVER);
@@ -942,13 +938,11 @@ final class EndFight implements Listener {
             if (dist > 2.0) {
                 RayTraceResult cover = player.getWorld().rayTraceBlocks(eye, toCenter.normalize(), Math.min(dist, 90.0), FluidCollisionMode.NEVER, true);
                 if (cover != null && cover.getHitBlock() != null && cover.getHitBlock().getType() == Material.OBSIDIAN) {
-                    ((Audience) player).sendActionBar(Component.text("Обсидиановая башня защитила Вас от волны!", NamedTextColor.GREEN));
                     return;
                 }
             }
             double dmg = player.isBlocking() ? 14.0 * 0.3 : 14.0;
             player.damage(dmg);
-            ((Audience) player).sendActionBar(Component.text("Ударная волна Перегрузки!", NamedTextColor.RED));
         }, () -> {});
     }
 
@@ -1093,7 +1087,6 @@ final class EndFight implements Listener {
                 world.playSound(spawned.getLocation(), Sound.ENTITY_ENDERMAN_TELEPORT, 1.5f, 1.1f);
             });
         }
-        broadcastToArena(activePlayers(), Component.text("Оставшиеся кристаллы Миража переместились на другие башни!", NamedTextColor.DARK_PURPLE));
     }
 
     private void cleanupArenaArtifacts(World world) {
@@ -1238,7 +1231,7 @@ final class EndFight implements Listener {
             // Overload interrupted -> stun dragon for 6 seconds with x1.5 incoming damage!
             crownShielded = false;
             crownStunnedUntil = System.currentTimeMillis() + 6_000L;
-            broadcastToArena(activePlayers(), Component.text("Перегрузка сорвана! Венец Края оглушён на 6 сек и получает ×1.5 урона!", NamedTextColor.GOLD));
+            broadcastToArena(activePlayers(), Component.text("Перегрузка сорвана!", NamedTextColor.GOLD));
             UUID id = activeDragonId;
             if (id != null) {
                 Entity e = Bukkit.getEntity(id);
@@ -1310,7 +1303,7 @@ final class EndFight implements Listener {
         if (kind() == DragonKind.MIRAGE && !mirageCopies.isEmpty()) {
             clearMirageCopies(dragon.getWorld());
             groundMirage(dragon, 10_000L);
-            broadcastToArena(activePlayers(), Component.text("Иллюзия развеяна! Мираж Края приземлился на 10 секунд!", NamedTextColor.LIGHT_PURPLE));
+            broadcastToArena(activePlayers(), Component.text("Иллюзии развеяны!", NamedTextColor.LIGHT_PURPLE));
         }
 
         double damage = Math.min(dragon.getHealth(), event.getFinalDamage());
@@ -1323,6 +1316,7 @@ final class EndFight implements Listener {
         if (state.firstFightComplete() || damage < dragon.getHealth() - 1.0) return;
         if (state.wave() >= 2) return;
         event.setCancelled(true);
+        DragonKind defeated = kind();
         try {
             state.saveFightProgress(contribution, maxPlayersSeen);
             state.advanceWave();
@@ -1337,16 +1331,15 @@ final class EndFight implements Listener {
         dragon.setInvulnerable(true);
         dragon.setInvisible(true);
         dragon.setPhase(EnderDragon.Phase.HOVER);
-        world.playSound(dragon.getLocation(), Sound.ENTITY_ENDER_DRAGON_DEATH, 2.5f, 1.0f);
-        world.spawnParticle(Particle.EXPLOSION_EMITTER, dragon.getLocation(), 4, 2.0, 2.0, 2.0, 0);
+        announceDefeat(defeated, dragon.getLocation());
         dragon.teleportAsync(new Location(world, 0.5, 155.0, 0.5));
-        int nextWaveNum = state.wave() + 1;
-        plugin.announce(Component.text("Волна пройдена! Передышка 20 секунд до волны " + nextWaveNum + "/3 (" + kind().title + ").", NamedTextColor.LIGHT_PURPLE));
+        var battle = dragon.getDragonBattle();
+        if (battle != null && battle.getBossBar() != null) battle.getBossBar().setTitle("Пустота наблюдает");
 
         // 10s countdown warning
         dragon.getScheduler().runDelayed(plugin, t -> {
             if (dragon.isValid()) {
-                broadcastToArena(activePlayers(), Component.text("До появления " + kind().title + " осталось 10 секунд...", kind().color));
+                broadcastToArena(activePlayers(), Component.text("Голос Края: Тишина обманчива. Что-то приближается.", NamedTextColor.DARK_PURPLE));
             }
         }, () -> {}, 200L);
 
@@ -1361,7 +1354,7 @@ final class EndFight implements Listener {
             dragon.setPhase(EnderDragon.Phase.CIRCLING);
             Location strike = new Location(world, 0.5, 68.0, 0.5);
             Bukkit.getRegionScheduler().run(plugin, strike, rt -> world.strikeLightningEffect(strike));
-            plugin.announce(Component.text("Волна " + nextWaveNum + "/3: Из пустоты появился " + kind().title + "!", kind().color));
+            announceArrival(dragon, kind());
         }, () -> transitioning.remove(dragon.getUniqueId()), 400L);
     }
 
@@ -1405,6 +1398,7 @@ final class EndFight implements Listener {
             return;
         }
         if (!state.firstFightComplete() && state.wave() < 2) return;
+        DragonKind defeated = kind();
         cleanupArenaArtifacts(dragon.getWorld());
 
         boolean first = !state.firstFightComplete();
@@ -1456,7 +1450,9 @@ final class EndFight implements Listener {
             return;
         }
 
-        plugin.announce(Component.text("✦ " + kind().title + " повержен! Топ вклада:", NamedTextColor.GOLD));
+        announceDefeat(defeated, dragon.getLocation());
+
+        plugin.announce(Component.text("✦ " + defeated.title + " повержен! Топ вклада:", NamedTextColor.GOLD));
         for (int i = 0; i < Math.min(5, ranked.size()); i++) {
             int place = i + 1;
             UUID id = ranked.get(i).getKey();
@@ -1481,7 +1477,7 @@ final class EndFight implements Listener {
             if (player != null) player.getScheduler().run(plugin, task -> deliver(player), () -> {});
         }
         if (first) {
-            plugin.announce(Component.text("✦ Испытание Трёх завершено! Внешние острова открыты, Просачивание Края прекратилось!", NamedTextColor.AQUA));
+            plugin.announce(Component.text("✦ Путь на внешние острова открыт. Просачивание Края прекратилось!", NamedTextColor.AQUA));
         }
         contribution.clear();
         maxPlayersSeen = 1;
@@ -1494,6 +1490,67 @@ final class EndFight implements Listener {
     // HELPERS
     // =========================================================================
 
+    private void announceArrival(EnderDragon dragon, DragonKind kind) {
+        String voice = switch (kind) {
+            case BASTION -> "Голос Края: Порог не откроется сам.";
+            case MIRAGE -> "Голос Края: Даже ваши глаза могут предать вас.";
+            case CROWN -> "Голос Края: Свет, рождённый пустотой, не приносит спасения.";
+        };
+        String reply = switch (kind) {
+            case BASTION -> "Бастион Края: Тогда попробуйте пройти через меня.";
+            case MIRAGE -> "Мираж Края: Что из увиденного здесь настоящее?";
+            case CROWN -> "Венец Края: Склонитесь перед моим сиянием.";
+        };
+        plugin.announce(Component.text(voice, NamedTextColor.DARK_PURPLE));
+        plugin.announce(Component.text(reply, kind.color));
+        World world = dragon.getWorld();
+        Location center = new Location(world, 0.5, 70.0, 0.5);
+        for (int pulse = 0; pulse < 3; pulse++) {
+            final float pitch = 0.7f + pulse * 0.15f;
+            Bukkit.getRegionScheduler().runDelayed(plugin, center, task -> {
+                world.playSound(center, Sound.ENTITY_ENDER_DRAGON_GROWL, 2.0f, pitch);
+                world.playSound(center, Sound.BLOCK_END_PORTAL_SPAWN, 1.5f, 0.8f);
+                world.spawnParticle(Particle.REVERSE_PORTAL, center, 85, 3.5, 2.0, 3.5, 0.12);
+                world.spawnParticle(switch (kind) {
+                    case BASTION -> Particle.FLAME;
+                    case MIRAGE -> Particle.WITCH;
+                    case CROWN -> Particle.END_ROD;
+                }, center, 55, 3.0, 1.5, 3.0, 0.08);
+            }, 1L + pulse * 12L);
+        }
+        for (var entry : activePlayers()) {
+            Player player = Bukkit.getPlayer(entry.getKey());
+            if (player != null) player.getScheduler().run(plugin, task ->
+                player.sendTitle(kind.title, "", 8, 45, 12), () -> {});
+        }
+    }
+
+    private void announceDefeat(DragonKind kind, Location at) {
+        String reply = switch (kind) {
+            case BASTION -> "Бастион Края: Стража... больше нет.";
+            case MIRAGE -> "Мираж Края: Может быть... это тоже иллюзия.";
+            case CROWN -> "Венец Края: Мой свет... гаснет.";
+        };
+        String voice = switch (kind) {
+            case BASTION -> "Голос Края: Порог уступил. Но путь ещё не открыт.";
+            case MIRAGE -> "Голос Края: Тени рассеялись. Не верьте свету.";
+            case CROWN -> "Голос Края: Сегодня пустота уступила вам путь.";
+        };
+        plugin.announce(Component.text(reply, kind.color));
+        plugin.announce(Component.text(voice, NamedTextColor.DARK_PURPLE));
+        World world = at.getWorld();
+        world.playSound(at, Sound.ENTITY_ENDER_DRAGON_DEATH, 2.8f, 0.85f);
+        world.playSound(at, Sound.BLOCK_END_PORTAL_SPAWN, 1.6f, 0.55f);
+        world.spawnParticle(Particle.EXPLOSION_EMITTER, at, 5, 2.0, 2.0, 2.0, 0);
+        world.spawnParticle(Particle.REVERSE_PORTAL, at, 120, 3.5, 2.5, 3.5, 0.2);
+        world.spawnParticle(switch (kind) {
+            case BASTION -> Particle.FLAME;
+            case MIRAGE -> Particle.WITCH;
+            case CROWN -> Particle.END_ROD;
+        }, at, 90, 3.0, 2.0, 3.0, 0.1);
+        world.strikeLightningEffect(at);
+    }
+
     private DragonKind kind() {
         return state.firstFightComplete() && state.repeatKind() != null ? state.repeatKind() : DragonKind.values()[state.wave()];
     }
@@ -1501,9 +1558,8 @@ final class EndFight implements Listener {
     private void configure(EnderDragon dragon, boolean restore) {
         if (!dragon.isValid()) return;
         DragonKind kind = kind();
-        String barTitle = !state.firstFightComplete()
-            ? kind.title + " · Волна " + (state.wave() + 1) + "/3"
-            : state.repeatEmpowered() ? "✦ Усиленный " + kind.title : kind.title;
+        String barTitle = state.firstFightComplete() && state.repeatEmpowered()
+            ? "✦ Усиленный " + kind.title : kind.title;
         dragon.customName(Component.text(kind.title, kind.color));
         dragon.setCustomNameVisible(true);
         dragon.setInvulnerable(false);
@@ -1547,7 +1603,7 @@ final class EndFight implements Listener {
         player.getScheduler().run(plugin, task -> {
             if (player.getWorld().getEnvironment() != World.Environment.THE_END || player.isDead()) return;
             player.damage(player.isBlocking() ? damage * shieldMultiplier : damage);
-            ((Audience) player).sendActionBar(Component.text(reason, color));
+            if (reason != null) ((Audience) player).sendActionBar(Component.text(reason, color));
         }, () -> {});
     }
 
