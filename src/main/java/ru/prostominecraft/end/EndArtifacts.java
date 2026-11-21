@@ -217,7 +217,7 @@ final class EndArtifacts implements Listener {
 
         world.playSound(eye, Sound.ENTITY_GUARDIAN_ATTACK, 1.0f, upgraded ? 1.45f : 1.25f);
         world.playSound(eye, Sound.ENTITY_ENDER_EYE_DEATH, 0.8f, 1.3f);
-        world.spawnParticle(Particle.FLASH, eye.clone().add(dir.clone().multiply(1.2)), 1, 0, 0, 0, 0);
+        world.spawnParticle(Particle.END_ROD, eye.clone().add(dir.clone().multiply(1.2)), 18, 0.15, 0.15, 0.15, 0.05);
 
         // Instantly shatter any End Crystals on the beam (credits EndFight via onCrystalShattered!)
         for (EnderCrystal crystal : orderedCrystals) {

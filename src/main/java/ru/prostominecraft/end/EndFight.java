@@ -28,6 +28,8 @@ import org.bukkit.attribute.Attribute;
 import org.bukkit.block.Block;
 import org.bukkit.boss.BarColor;
 import org.bukkit.entity.ComplexEntityPart;
+import org.bukkit.entity.BlockDisplay;
+import org.bukkit.entity.Display;
 import org.bukkit.entity.EnderCrystal;
 import org.bukkit.entity.EnderDragon;
 import org.bukkit.entity.Entity;
@@ -50,7 +52,10 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.util.RayTraceResult;
+import org.bukkit.util.Transformation;
 import org.bukkit.util.Vector;
+import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 /**
  * Full 3-dragon End encounter for Folia 26.3:
@@ -70,6 +75,7 @@ final class EndFight implements Listener {
     private final NamespacedKey mirageCopyKey;
     private final NamespacedKey crownCoreKey;
     private final NamespacedKey managedCrystalKey;
+    private final NamespacedKey configuredDragonKey;
 
     private final Map<UUID, Double> contribution = new ConcurrentHashMap<>();
     private final Map<UUID, PlayerPosition> positions = new ConcurrentHashMap<>();
@@ -95,6 +101,8 @@ final class EndFight implements Listener {
     private final Map<BlockKey, Integer> resonatorBlocks = new ConcurrentHashMap<>();
     private final Map<Integer, UUID> crownCrystalByPillar = new ConcurrentHashMap<>();
     private final Map<Integer, Location> resonatorLocations = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> beamHitUntil = new ConcurrentHashMap<>();
+    private volatile UUID crownBeamDisplayId;
     private final Set<UUID> crownCores = ConcurrentHashMap.newKeySet();
     private volatile boolean crownOverloadDone;
     private volatile boolean crownShielded;
@@ -111,6 +119,7 @@ final class EndFight implements Listener {
         this.mirageCopyKey = new NamespacedKey(plugin, "mirage_copy");
         this.crownCoreKey = new NamespacedKey(plugin, "crown_core");
         this.managedCrystalKey = new NamespacedKey(plugin, "managed_crystal");
+        this.configuredDragonKey = new NamespacedKey(plugin, "configured_dragon");
         contribution.putAll(state.fightContribution());
         maxPlayersSeen = state.fightMaxPlayers();
     }
@@ -204,7 +213,10 @@ final class EndFight implements Listener {
                 }
             }
             resetBossMechanicFlags();
-            configure(dragon, state.firstFightComplete() && !freshEncounter);
+            var healthAttribute = dragon.getAttribute(Attribute.MAX_HEALTH);
+            boolean alreadyConfigured = dragon.getPersistentDataContainer().has(configuredDragonKey, PersistentDataType.BYTE)
+                || healthAttribute != null && healthAttribute.getBaseValue() > 200.0;
+            configure(dragon, alreadyConfigured && !freshEncounter);
             if (freshEncounter || !state.firstFightComplete()) {
                 setupWaveArena(dragon.getWorld(), kind());
             }
@@ -285,10 +297,8 @@ final class EndFight implements Listener {
             world.spawnParticle(Particle.REVERSE_PORTAL, dragon.getLocation(), 20, 2.0, 1.5, 2.0, 0.08);
         }
         if (current == DragonKind.MIRAGE && mirageGroundedUntil > 0 && now < mirageGroundedUntil) {
-            if (dragon.getPhase() != EnderDragon.Phase.SEARCH_FOR_BREATH_ATTACK_TARGET
-                && dragon.getPhase() != EnderDragon.Phase.LAND_ON_PORTAL) {
-                dragon.setPhase(EnderDragon.Phase.LAND_ON_PORTAL);
-            }
+            if (dragon.getPhase() != EnderDragon.Phase.SEARCH_FOR_BREATH_ATTACK_TARGET)
+                dragon.setPhase(EnderDragon.Phase.SEARCH_FOR_BREATH_ATTACK_TARGET);
         }
 
         // Crown resonator vertical particle beams (guide ground players to resonators!)
@@ -470,6 +480,11 @@ final class EndFight implements Listener {
 
     // ---------- 2. МИРАЖ КРАЯ ----------
     private void runMirageAbilities(EnderDragon dragon, List<Map.Entry<UUID, PlayerPosition>> near, int seconds, double hpRatio) {
+        // Give melee players a predictable opening instead of waiting for the vanilla AI to land.
+        if (seconds % 30 == 6 && System.currentTimeMillis() >= mirageGroundedUntil) {
+            groundMirage(dragon, 10_000L);
+            broadcastToArena(near, Component.text("Мираж Края приземляется у портала!", NamedTextColor.LIGHT_PURPLE));
+        }
         // 1) Двойники-миражи на 65% и 30% HP
         if (!mirageSplit65Done && hpRatio <= 0.65) {
             mirageSplit65Done = true;
@@ -480,7 +495,7 @@ final class EndFight implements Listener {
         }
 
         // 2) Шаг Эндера (каждые 18 сек) — блинк за спину игрока для пикирования
-        if (seconds % 18 == 0) {
+        if (seconds % 18 == 0 && System.currentTimeMillis() >= mirageGroundedUntil) {
             PlayerPosition target = near.get(ThreadLocalRandom.current().nextInt(near.size())).getValue();
             World world = dragon.getWorld();
             world.spawnParticle(Particle.PORTAL, dragon.getLocation(), 80, 3.0, 2.0, 3.0, 0.25);
@@ -624,7 +639,7 @@ final class EndFight implements Listener {
                 });
                 for (var e : activePlayers()) {
                     double dx = e.getValue().x - center.getX(), dz = e.getValue().z - center.getZ();
-                    if (dx * dx + dz * dz <= 25.0) damagePlayer(e.getKey(), 6.0, 0.4, "Разлом Миража", NamedTextColor.LIGHT_PURPLE);
+                    if (dx * dx + dz * dz <= 25.0) damagePlayer(e.getKey(), 12.0, 0.35, "Разлом Миража", NamedTextColor.LIGHT_PURPLE);
                 }
             }, () -> {}, 50L);
         }
@@ -661,6 +676,17 @@ final class EndFight implements Listener {
                 }, () -> mirageCopies.remove(copy.getUniqueId()), 10L, 10L);
             });
         }
+    }
+
+    private void groundMirage(EnderDragon dragon, long durationMillis) {
+        mirageGroundedUntil = System.currentTimeMillis() + durationMillis;
+        Location perch = new Location(dragon.getWorld(), 0.5, 68.0, 0.5);
+        dragon.teleportAsync(perch).whenComplete((moved, error) -> dragon.getScheduler().run(plugin, task -> {
+            if (!dragon.isValid() || dragon.isDead() || error != null || !Boolean.TRUE.equals(moved)) return;
+            dragon.setPhase(EnderDragon.Phase.SEARCH_FOR_BREATH_ATTACK_TARGET);
+            dragon.getWorld().playSound(perch, Sound.ENTITY_ENDER_DRAGON_GROWL, 2.0f, 1.2f);
+            dragon.getWorld().spawnParticle(Particle.REVERSE_PORTAL, perch, 65, 2.0, 1.0, 2.0, 0.1);
+        }, () -> {}));
     }
 
     private void clearMirageCopies(World world) {
@@ -750,18 +776,37 @@ final class EndFight implements Listener {
             }, () -> {}, 60L);
         }
 
-        // 3) Луч маяка (каждые 24 сек) — вращающийся луч над ареной, блокируется башнями
+        // 3) Луч маяка: one moving display wall, with no lingering particle trail.
         if (seconds % 24 == 12) {
             World world = dragon.getWorld();
             broadcastToArena(near, Component.text("Венец Края запускает Луч маяка! Бегите по кругу или прячьтесь за башнями!", NamedTextColor.AQUA));
             double startAngle = ThreadLocalRandom.current().nextDouble(Math.PI * 2);
-            Location origin = new Location(world, 0.5, 68.0, 0.5);
-            for (int step = 0; step < 12; step++) {
-                final double angle = startAngle + step * (Math.PI / 6.0);
+            Location origin = new Location(world, 0.5, 62.0, 0.5);
+            clearCrownBeam();
+            Bukkit.getRegionScheduler().run(plugin, origin, task -> {
+                BlockDisplay wall = world.spawn(origin, BlockDisplay.class, display -> {
+                    display.setBlock(Material.CYAN_STAINED_GLASS.createBlockData());
+                    display.setBrightness(new Display.Brightness(15, 15));
+                    display.setDisplayWidth(110.0f);
+                    display.setDisplayHeight(90.0f);
+                    display.setViewRange(3.0f);
+                    display.setInterpolationDelay(0);
+                    display.setInterpolationDuration(2);
+                    display.setTransformation(beamTransform(startAngle));
+                });
+                crownBeamDisplayId = wall.getUniqueId();
+            });
+            for (int step = 0; step < 40; step++) {
+                final double angle = startAngle + step * (Math.PI * 2.0 / 40.0);
                 dragon.getScheduler().runDelayed(plugin, t -> {
-                    if (!dragon.isValid() || dragon.isDead() || crownShielded) return;
-                    Location target = new Location(world, Math.cos(angle) * 52.0, 68.0, Math.sin(angle) * 52.0);
-                    drawBeaconRay(world, origin, target);
+                    if (!dragon.isValid() || dragon.isDead() || crownShielded) {
+                        clearCrownBeam();
+                        return;
+                    }
+                    UUID wallId = crownBeamDisplayId;
+                    Entity entity = wallId == null ? null : Bukkit.getEntity(wallId);
+                    if (entity instanceof BlockDisplay wall)
+                        wall.getScheduler().run(plugin, wt -> wall.setTransformation(beamTransform(angle)), () -> {});
                     for (var entry : activePlayers()) {
                         PlayerPosition p = entry.getValue();
                         // Distance from player to beam segment in XZ
@@ -770,12 +815,11 @@ final class EndFight implements Listener {
                         double proj = p.x * beamCos + p.z * beamSin;
                         if (proj < 2.0 || proj > 54.0) continue;
                         double perp = Math.abs(-p.x * beamSin + p.z * beamCos);
-                        if (perp <= 3.0) {
-                            hitBeaconBeam(entry.getKey(), origin);
-                        }
+                        if (perp <= 2.5) hitBeaconBeam(entry.getKey(), origin);
                     }
-                }, () -> {}, 1L + step * 10L);
+                }, () -> {}, 2L + step * 2L);
             }
+            dragon.getScheduler().runDelayed(plugin, t -> clearCrownBeam(), () -> clearCrownBeam(), 84L);
         }
         // Crownfall: a marked player must leave the impact circle before the crystal burst.
         if (seconds % 30 == 20) {
@@ -814,6 +858,8 @@ final class EndFight implements Listener {
         if (player == null) return;
         player.getScheduler().run(plugin, t -> {
             if (player.getWorld().getEnvironment() != World.Environment.THE_END || player.isDead()) return;
+            long now = System.currentTimeMillis();
+            if (now < beamHitUntil.getOrDefault(id, 0L)) return;
             Location eye = player.getEyeLocation();
             Vector toOrigin = beamOrigin.toVector().subtract(eye.toVector());
             double dist = toOrigin.length();
@@ -824,6 +870,7 @@ final class EndFight implements Listener {
                     return;
                 }
             }
+            beamHitUntil.put(id, now + 850L);
             player.damage(player.isBlocking() ? 2.0 : 4.0);
             player.getWorld().spawnParticle(Particle.ELECTRIC_SPARK, eye, 12, 0.3, 0.4, 0.3, 0.05);
             ((Audience) player).sendActionBar(Component.text("Луч маяка! Укройтесь за башней!", NamedTextColor.AQUA));
@@ -1050,6 +1097,7 @@ final class EndFight implements Listener {
     }
 
     private void cleanupArenaArtifacts(World world) {
+        clearCrownBeam();
         clearMirageCopies(world);
         clearCrownCores();
         mirageActivePillars.clear();
@@ -1261,9 +1309,8 @@ final class EndFight implements Listener {
         // Mirage: hitting the real dragon while copies exist shatters copies and grounds dragon for 5s!
         if (kind() == DragonKind.MIRAGE && !mirageCopies.isEmpty()) {
             clearMirageCopies(dragon.getWorld());
-            mirageGroundedUntil = System.currentTimeMillis() + 5_000L;
-            dragon.setPhase(EnderDragon.Phase.LAND_ON_PORTAL);
-            broadcastToArena(activePlayers(), Component.text("Иллюзия развеяна! Мираж Края спустился к земле на 5 секунд!", NamedTextColor.LIGHT_PURPLE));
+            groundMirage(dragon, 10_000L);
+            broadcastToArena(activePlayers(), Component.text("Иллюзия развеяна! Мираж Края приземлился на 10 секунд!", NamedTextColor.LIGHT_PURPLE));
         }
 
         double damage = Math.min(dragon.getHealth(), event.getFinalDamage());
@@ -1467,6 +1514,7 @@ final class EndFight implements Listener {
             attribute.setBaseValue(max);
             dragon.setHealth(restore ? Math.min(dragon.getHealth(), max) : max);
         }
+        dragon.getPersistentDataContainer().set(configuredDragonKey, PersistentDataType.BYTE, (byte) 1);
         var battle = dragon.getDragonBattle();
         if (battle != null && battle.getBossBar() != null) {
             battle.getBossBar().setTitle(barTitle);
@@ -1526,20 +1574,19 @@ final class EndFight implements Listener {
         }
     }
 
-    private void drawBeaconRay(World world, Location origin, Location target) {
-        Vector delta = target.toVector().subtract(origin.toVector());
-        for (int i = 0; i <= 52; i++) {
-            final int pointIndex = i;
-            Location base = origin.clone().add(delta.clone().multiply(i / 52.0));
-            Bukkit.getRegionScheduler().run(plugin, base, task -> {
-                for (int y = 0; y <= 12; y += 2) {
-                    Location point = base.clone().add(0, y, 0);
-                    world.spawnParticle(Particle.END_ROD, point, 5, 0.25, 0.3, 0.25, 0.01);
-                    if (y % 4 == 0) world.spawnParticle(Particle.ELECTRIC_SPARK, point, 2, 0.1, 0.2, 0.1, 0.01);
-                }
-                if (pointIndex % 8 == 0) world.playSound(base, Sound.BLOCK_BEACON_AMBIENT, 1.4f, 1.7f);
-            });
-        }
+    private Transformation beamTransform(double angle) {
+        return new Transformation(new Vector3f(), new Quaternionf().rotationY((float) -angle),
+            new Vector3f(52.0f, 55.0f, 0.35f), new Quaternionf());
+    }
+
+    private void clearCrownBeam() {
+        UUID id = crownBeamDisplayId;
+        crownBeamDisplayId = null;
+        if (id == null) return;
+        Entity entity = Bukkit.getEntity(id);
+        if (entity != null) entity.getScheduler().run(plugin, task -> {
+            if (entity.isValid()) entity.remove();
+        }, () -> {});
     }
 
     private record PlayerPosition(double x, double y, double z, long timestamp) {}

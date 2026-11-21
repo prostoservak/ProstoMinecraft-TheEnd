@@ -1,5 +1,5 @@
 name: ProstoMinecraft-End
-version: '1.0.2-visual-test'
+version: '1.0.3-combat-test'
 main: ru.prostominecraft.end.EndPlugin
 api-version: '26.3'
 folia-supported: true
