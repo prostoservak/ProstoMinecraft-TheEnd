@@ -76,6 +76,7 @@ final class EndFight implements Listener {
     private final NamespacedKey crownCoreKey;
     private final NamespacedKey managedCrystalKey;
     private final NamespacedKey configuredDragonKey;
+    private final NamespacedKey arrivalAnnouncedKey;
 
     private final Map<UUID, Double> contribution = new ConcurrentHashMap<>();
     private final Map<UUID, PlayerPosition> positions = new ConcurrentHashMap<>();
@@ -83,6 +84,7 @@ final class EndFight implements Listener {
     private final Map<UUID, Boolean> delivering = new ConcurrentHashMap<>();
     private final Set<UUID> countedCrystals = ConcurrentHashMap.newKeySet();
     private final Set<UUID> trackedDragons = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> arrivalCountdowns = ConcurrentHashMap.newKeySet();
     private final Map<UUID, Long> blockExplosionUntil = new ConcurrentHashMap<>();
 
     // Per-dragon encounter runtime state
@@ -108,6 +110,7 @@ final class EndFight implements Listener {
     private volatile boolean crownShielded;
     private volatile long crownStunnedUntil;
     private volatile UUID activeDragonId;
+    private volatile UUID pendingArrivalId;
 
     // Temporary obsidian cage blocks placed for Bastion (cleaned between waves)
     private final Set<BlockKey> temporaryCageBlocks = ConcurrentHashMap.newKeySet();
@@ -120,6 +123,7 @@ final class EndFight implements Listener {
         this.crownCoreKey = new NamespacedKey(plugin, "crown_core");
         this.managedCrystalKey = new NamespacedKey(plugin, "managed_crystal");
         this.configuredDragonKey = new NamespacedKey(plugin, "configured_dragon");
+        this.arrivalAnnouncedKey = new NamespacedKey(plugin, "arrival_announced");
         contribution.putAll(state.fightContribution());
         maxPlayersSeen = state.fightMaxPlayers();
     }
@@ -131,6 +135,15 @@ final class EndFight implements Listener {
         }
         Location point = player.getLocation();
         positions.put(player.getUniqueId(), new PlayerPosition(point.getX(), point.getY(), point.getZ(), System.currentTimeMillis()));
+        UUID pending = pendingArrivalId;
+        if (pending != null) {
+            Entity entity = Bukkit.getEntity(pending);
+            if (entity instanceof EnderDragon dragon) dragon.getScheduler().run(plugin, task -> {
+                if (!dragon.isValid() || dragon.getPersistentDataContainer().has(arrivalAnnouncedKey, PersistentDataType.BYTE)) return;
+                if (!state.firstFightComplete() && state.wave() == 0) startFirstArrivalCountdown(dragon);
+                else announceArrival(dragon, kind());
+            }, () -> {});
+        }
     }
 
     void deliver(Player player) {
@@ -220,7 +233,10 @@ final class EndFight implements Listener {
             if (freshEncounter || !state.firstFightComplete()) {
                 setupWaveArena(dragon.getWorld(), kind());
             }
-            if (freshEncounter || !alreadyConfigured) announceArrival(dragon, kind());
+            if (freshEncounter || !dragon.getPersistentDataContainer().has(arrivalAnnouncedKey, PersistentDataType.BYTE)) {
+                if (!state.firstFightComplete() && state.wave() == 0) startFirstArrivalCountdown(dragon);
+                else announceArrival(dragon, kind());
+            }
         }, () -> trackedDragons.remove(dragon.getUniqueId()));
 
         final int[] seconds = {0};
@@ -260,7 +276,9 @@ final class EndFight implements Listener {
             }
 
             seconds[0]++;
-            if (!transitioning.containsKey(dragon.getUniqueId())) {
+            if (!transitioning.containsKey(dragon.getUniqueId())
+                && !arrivalCountdowns.contains(dragon.getUniqueId())
+                && !dragon.getUniqueId().equals(pendingArrivalId)) {
                 tickAmbientEffects(dragon, seconds[0]);
                 if (count > 0) runAbilities(dragon, near, seconds[0]);
             }
@@ -1490,7 +1508,78 @@ final class EndFight implements Listener {
     // HELPERS
     // =========================================================================
 
+    private void startFirstArrivalCountdown(EnderDragon dragon) {
+        UUID id = dragon.getUniqueId();
+        if (dragon.getPersistentDataContainer().has(arrivalAnnouncedKey, PersistentDataType.BYTE)
+            || arrivalCountdowns.contains(id)) return;
+        dragon.setInvulnerable(true);
+        dragon.setInvisible(true);
+        dragon.setPhase(EnderDragon.Phase.HOVER);
+        var battle = dragon.getDragonBattle();
+        if (battle != null && battle.getBossBar() != null) {
+            battle.getBossBar().setTitle("\u00A75Пустота пробуждается");
+            battle.getBossBar().setColor(BarColor.PURPLE);
+        }
+        if (activePlayers().isEmpty()) {
+            pendingArrivalId = id;
+            dragon.teleportAsync(new Location(dragon.getWorld(), 0.5, 155.0, 0.5));
+            return;
+        }
+        if (!arrivalCountdowns.add(id)) return;
+        pendingArrivalId = null;
+        dragon.teleportAsync(new Location(dragon.getWorld(), 0.5, 155.0, 0.5));
+        int[] left = {10};
+        dragon.getScheduler().runAtFixedRate(plugin, task -> {
+            if (!dragon.isValid() || dragon.isDead()) {
+                arrivalCountdowns.remove(id);
+                task.cancel();
+                return;
+            }
+            List<Map.Entry<UUID, PlayerPosition>> near = activePlayers();
+            if (near.isEmpty()) return;
+            if (left[0] > 0) {
+                int remaining = left[0]--;
+                World world = dragon.getWorld();
+                Location center = new Location(world, 0.5, 70.0, 0.5);
+                Bukkit.getRegionScheduler().run(plugin, center, visual -> {
+                    world.spawnParticle(Particle.REVERSE_PORTAL, center, 70, 3.5, 1.5, 3.5, 0.15);
+                    world.spawnParticle(Particle.END_ROD, center, 24, 2.0, 1.0, 2.0, 0.05);
+                    world.playSound(center, Sound.BLOCK_AMETHYST_BLOCK_CHIME, 1.4f, 0.6f + (10 - remaining) * 0.1f);
+                });
+                for (var entry : near) {
+                    Player player = Bukkit.getPlayer(entry.getKey());
+                    if (player != null) player.getScheduler().run(plugin, pt ->
+                        player.sendTitle("\u00A75" + remaining, "\u00A7dКрай пробуждается", 0, 24, 0), () -> {});
+                }
+                return;
+            }
+            arrivalCountdowns.remove(id);
+            task.cancel();
+            dragon.teleportAsync(new Location(dragon.getWorld(), 0.5, 105.0, 0.5))
+                .whenComplete((moved, error) -> dragon.getScheduler().run(plugin, done -> {
+                    if (!dragon.isValid() || error != null || !Boolean.TRUE.equals(moved)) return;
+                    configure(dragon, true);
+                    dragon.setPhase(EnderDragon.Phase.CIRCLING);
+                    announceArrival(dragon, DragonKind.BASTION);
+                }, () -> {}));
+        }, () -> arrivalCountdowns.remove(id), 1L, 20L);
+    }
+
+    private String dragonColorCode(DragonKind kind) {
+        return switch (kind) {
+            case BASTION -> "\u00A7c";
+            case MIRAGE -> "\u00A75";
+            case CROWN -> "\u00A7b";
+        };
+    }
+
     private void announceArrival(EnderDragon dragon, DragonKind kind) {
+        if (activePlayers().isEmpty()) {
+            pendingArrivalId = dragon.getUniqueId();
+            return;
+        }
+        pendingArrivalId = null;
+        dragon.getPersistentDataContainer().set(arrivalAnnouncedKey, PersistentDataType.BYTE, (byte) 1);
         String voice = switch (kind) {
             case BASTION -> "Голос Края: Порог не откроется сам.";
             case MIRAGE -> "Голос Края: Даже ваши глаза могут предать вас.";
@@ -1521,7 +1610,7 @@ final class EndFight implements Listener {
         for (var entry : activePlayers()) {
             Player player = Bukkit.getPlayer(entry.getKey());
             if (player != null) player.getScheduler().run(plugin, task ->
-                player.sendTitle(kind.title, "", 8, 45, 12), () -> {});
+                player.sendTitle(dragonColorCode(kind) + kind.title, "", 8, 45, 12), () -> {});
         }
     }
 
@@ -1573,7 +1662,7 @@ final class EndFight implements Listener {
         dragon.getPersistentDataContainer().set(configuredDragonKey, PersistentDataType.BYTE, (byte) 1);
         var battle = dragon.getDragonBattle();
         if (battle != null && battle.getBossBar() != null) {
-            battle.getBossBar().setTitle(barTitle);
+            battle.getBossBar().setTitle(dragonColorCode(kind) + barTitle);
             battle.getBossBar().setColor(switch (kind) {
                 case BASTION -> BarColor.RED;
                 case MIRAGE -> BarColor.PURPLE;
