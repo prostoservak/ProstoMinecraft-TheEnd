@@ -1,5 +1,5 @@
 name: ProstoMinecraft-End
-version: '0.1.0-dev'
+version: '1.0.1-seals'
 main: ru.prostominecraft.end.EndPlugin
 api-version: '26.3'
 folia-supported: true
@@ -8,3 +8,7 @@ commands:
   end:
     description: Show the six End seals
     aliases: [endseals]
+permissions:
+  prostominecraft.end.admin:
+    description: Trigger End opening reminders manually
+    default: op

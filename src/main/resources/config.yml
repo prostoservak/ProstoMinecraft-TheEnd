@@ -1,5 +1,6 @@
+seals:
+  enabled: true
 end-opening:
-  # Keep disabled until the three-dragon encounter and rewards are implemented.
   enabled: false
   countdown-seconds: 300
   reminder:

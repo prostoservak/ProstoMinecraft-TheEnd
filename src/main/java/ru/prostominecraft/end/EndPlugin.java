@@ -67,6 +67,7 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         items = new EndItems(this);
         artifacts = new EndArtifacts(this, items);
         fight = new EndFight(this, state, items);
+        artifacts.bindFight(fight);
         crafting = new EndCrafting(this, items);
         seepage = new EndSeepage(this, state);
         crafting.registerRecipes();
@@ -75,28 +76,133 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         Bukkit.getPluginManager().registerEvents(crafting, this);
         Bukkit.getPluginManager().registerEvents(artifacts, this);
         Bukkit.getPluginManager().registerEvents(seepage, this);
+        Bukkit.getPluginManager().registerEvents(new LegacyModelSync(this, items), this);
         Bukkit.getGlobalRegionScheduler().runAtFixedRate(this, task -> tickOpening(), 20L, 20L);
         Bukkit.getGlobalRegionScheduler().runDelayed(this, task -> fight.attachExisting(), 40L);
         forPlayers(this::trackPlayer);
-        getLogger().info("End foundation loaded; seal submission enabled=" + openingEnabled());
+        getLogger().info("End items loaded; seals=" + sealsEnabled() + ", portal opening=" + openingEnabled());
+    }
+
+    @Override
+    public void onDisable() {
+        if (fight != null) fight.cleanup();
     }
 
     NamespacedKey sealKey() { return sealKey; }
 
     private boolean openingEnabled() { return !state.corrupt() && getConfig().getBoolean("end-opening.enabled", false); }
+    private boolean sealsEnabled() { return !state.corrupt() && getConfig().getBoolean("seals.enabled", true); }
+
+    private static final List<String> GIVE_ITEMS = List.of(
+        "void_needle", "void_needle_upgraded",
+        "dragon_claw", "dragon_claw_upgraded",
+        "sky_loop", "sky_loop_upgraded",
+        "dragon_scale", "dragon_chitin", "dragon_blood",
+        "chorus_brew", "empowered_end_crystal", "end_wings", "yggdrasil_fruit_empowered",
+        "seal_heat", "seal_depths", "seal_darkness", "seal_breeze", "seal_life", "seal_threshold"
+    );
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length > 0 && (args[0].equalsIgnoreCase("remind") || args[0].equalsIgnoreCase("reminder"))) {
+            if (!sender.hasPermission("prostominecraft.end.admin") && !sender.isOp()) {
+                ((Audience) sender).sendMessage(Component.text("Недостаточно прав.", NamedTextColor.RED));
+                return true;
+            }
+            String custom = args.length > 1
+                ? String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length)).trim()
+                : null;
+            Bukkit.getGlobalRegionScheduler().execute(this, () -> sendReminder(custom));
+            ((Audience) sender).sendMessage(Component.text("Напоминание о Крае отправлено игрокам.", NamedTextColor.LIGHT_PURPLE));
+            return true;
+        }
+        if (args.length > 0 && args[0].equalsIgnoreCase("give")) {
+            if (!sender.hasPermission("prostominecraft.end.admin") && !sender.isOp()) {
+                ((Audience) sender).sendMessage(Component.text("Недостаточно прав.", NamedTextColor.RED));
+                return true;
+            }
+            if (!(sender instanceof Player player)) {
+                ((Audience) sender).sendMessage(Component.text("Команда /end give доступна только игроку в игре.", NamedTextColor.YELLOW));
+                return true;
+            }
+            if (args.length < 2) {
+                ((Audience) player).sendMessage(Component.text("Использование: /end give <предмет> [кол-во]", NamedTextColor.YELLOW));
+                return true;
+            }
+            String id = args[1].toLowerCase(java.util.Locale.ROOT);
+            int amount = 1;
+            if (args.length >= 3) {
+                try { amount = Math.max(1, Math.min(64, Integer.parseInt(args[2]))); }
+                catch (NumberFormatException ignored) {}
+            }
+            ItemStack given = buildGiveItem(id, amount);
+            if (given == null) {
+                ((Audience) player).sendMessage(Component.text("Неизвестный предмет: " + id, NamedTextColor.RED));
+                return true;
+            }
+            player.getScheduler().run(this, task -> {
+                var leftover = player.getInventory().addItem(given);
+                for (ItemStack drop : leftover.values()) player.getWorld().dropItemNaturally(player.getLocation(), drop);
+                ((Audience) player).sendMessage(Component.text("Выдано: " + id + " ×" + given.getAmount(), NamedTextColor.LIGHT_PURPLE));
+            }, () -> {});
+            return true;
+        }
         if (!(sender instanceof Player player)) {
-            getLogger().info("Откройте меню в игре: /end");
+            ((Audience) sender).sendMessage(Component.text("Использование из консоли: /end remind [текст]", NamedTextColor.YELLOW));
             return true;
         }
         if (args.length != 0) {
-            ((Audience) player).sendMessage(Component.text("Использование: /end", NamedTextColor.RED));
+            String usage = (player.hasPermission("prostominecraft.end.admin") || player.isOp())
+                ? "Использование: /end | /end remind [текст] | /end give <предмет> [кол-во]"
+                : "Использование: /end";
+            ((Audience) player).sendMessage(Component.text(usage, NamedTextColor.RED));
             return true;
         }
         openMenu(player);
         return true;
+    }
+
+    private ItemStack buildGiveItem(String id, int amount) {
+        if (id.startsWith("seal_")) {
+            try {
+                Seal seal = Seal.valueOf(id.substring(5).toUpperCase(java.util.Locale.ROOT));
+                ItemStack stack = seal.item(this);
+                stack.setAmount(amount);
+                return stack;
+            } catch (IllegalArgumentException ignored) { return null; }
+        }
+        if (id.equals("end_wings")) return items.wings(new ItemStack(Material.ELYTRA));
+        if (id.endsWith("_upgraded")) {
+            String base = id.substring(0, id.length() - "_upgraded".length());
+            if (base.equals("void_needle") || base.equals("dragon_claw") || base.equals("sky_loop")) {
+                return items.upgrade(items.make(base, 1));
+            }
+            return null;
+        }
+        if (GIVE_ITEMS.contains(id)) {
+            int capped = (id.equals("void_needle") || id.equals("dragon_claw") || id.equals("sky_loop")) ? 1 : amount;
+            return items.make(id, capped);
+        }
+        return null;
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (!sender.hasPermission("prostominecraft.end.admin") && !sender.isOp()) return List.of();
+        if (args.length == 1) {
+            String prefix = args[0].toLowerCase(java.util.Locale.ROOT);
+            List<String> out = new java.util.ArrayList<>();
+            if ("remind".startsWith(prefix)) out.add("remind");
+            if ("give".startsWith(prefix)) out.add("give");
+            return out;
+        }
+        if (args.length == 2 && args[0].equalsIgnoreCase("give")) {
+            String prefix = args[1].toLowerCase(java.util.Locale.ROOT);
+            List<String> out = new java.util.ArrayList<>();
+            for (String item : GIVE_ITEMS) if (item.startsWith(prefix)) out.add(item);
+            return out;
+        }
+        return List.of();
     }
 
     private void openMenu(Player player) {
@@ -111,7 +217,7 @@ public final class EndPlugin extends JavaPlugin implements Listener {
             List<Component> lore = contributor == null ? List.of(
                 Component.text(seal.ingredients.get(0), NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
                 Component.text(seal.ingredients.get(1), NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
-                Component.text(openingEnabled() ? "Нажмите, если Печать в инвентаре" : "Сбор Печатей пока готовится", NamedTextColor.YELLOW)
+                Component.text(sealsEnabled() ? "Нажмите, если Печать в инвентаре" : "Сбор Печатей пока готовится", NamedTextColor.YELLOW)
                     .decoration(TextDecoration.ITALIC, false)
             ) : List.of(Component.text("Сдал: " + contributor, NamedTextColor.GREEN).decoration(TextDecoration.ITALIC, false));
             meta.lore(lore);
@@ -140,7 +246,7 @@ public final class EndPlugin extends JavaPlugin implements Listener {
     }
 
     private void submit(Player player, Seal seal) {
-        if (!openingEnabled()) {
+        if (!sealsEnabled()) {
             ((Audience) player).sendMessage(Component.text("Сбор Печатей пока готовится.", NamedTextColor.YELLOW));
             return;
         }
@@ -164,7 +270,7 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         if (item.getAmount() == 1) player.getInventory().setItem(found, null);
         else item.setAmount(item.getAmount() - 1);
         try {
-            int countdown = Math.max(1, getConfig().getInt("end-opening.countdown-seconds", 300));
+            int countdown = openingEnabled() ? Math.max(1, getConfig().getInt("end-opening.countdown-seconds", 300)) : 0;
             if (!state.submit(seal, player.getUniqueId(), player.getName(), System.currentTimeMillis(), countdown)) {
                 restore(player, item, found);
                 ((Audience) player).sendMessage(Component.text("Эта Печать уже сдана.", NamedTextColor.YELLOW));
@@ -178,7 +284,9 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         }
         announce(Component.text(player.getName() + " сдал Печать " + seal.title + " · " + state.count() + "/6 печатей сломано", seal.color));
         player.closeInventory();
-        if (state.count() == Seal.values().length) announce(Component.text("Все Печати собраны! Начался обратный отсчёт до открытия Энда.", NamedTextColor.LIGHT_PURPLE));
+        if (state.count() == Seal.values().length) announce(Component.text(openingEnabled()
+            ? "Все Печати собраны! Начался обратный отсчёт до открытия Энда."
+            : "Все Печати собраны. Край пока остаётся запечатанным.", NamedTextColor.LIGHT_PURPLE));
     }
 
     private void restore(Player player, ItemStack item, int slot) {
@@ -187,18 +295,18 @@ public final class EndPlugin extends JavaPlugin implements Listener {
         else current.setAmount(current.getAmount() + 1);
     }
 
-    @EventHandler(ignoreCancelled = true)
+    @EventHandler
     public void onPrepareCraft(PrepareItemCraftEvent event) {
         Seal seal = recipeSeal(event.getRecipe());
         if (seal == null) return;
-        if (!openingEnabled() || seal == Seal.HEAT && !hasNormalTincture(event.getInventory().getMatrix()))
+        if (!sealsEnabled() || seal == Seal.HEAT && !hasNormalTincture(event.getInventory().getMatrix()))
             event.getInventory().setResult(null);
     }
 
     @EventHandler(ignoreCancelled = true)
     public void onCraft(CraftItemEvent event) {
         Seal seal = recipeSeal(event.getRecipe());
-        if (seal != null && (!openingEnabled() || seal == Seal.HEAT && !hasNormalTincture(event.getInventory().getMatrix())))
+        if (seal != null && (!sealsEnabled() || seal == Seal.HEAT && !hasNormalTincture(event.getInventory().getMatrix())))
             event.setCancelled(true);
     }
 
@@ -276,17 +384,27 @@ public final class EndPlugin extends JavaPlugin implements Listener {
     }
 
     private void trackPlayer(Player player) {
+        player.getScheduler().run(this, task -> discoverEndRecipes(player), () -> {});
         player.getScheduler().runAtFixedRate(this, task -> fight.updatePosition(player), () -> {}, 1L, 20L);
         player.getScheduler().runAtFixedRate(this, task -> artifacts.tick(player), () -> {}, 5L, 5L);
         player.getScheduler().runAtFixedRate(this, task -> seepage.tick(player), () -> {}, 20L, 20L);
     }
 
+    private void discoverEndRecipes(Player player) {
+        java.util.List<NamespacedKey> keys = new java.util.ArrayList<>();
+        for (Seal seal : Seal.values()) keys.add(seal.recipeKey(this));
+        keys.addAll(crafting.recipeKeys());
+        player.discoverRecipes(keys);
+    }
+
     private void tickOpening() {
         tickReminder();
         tickBorderBonus();
-        if (!openingEnabled() || state.opened() || state.openingAt() == 0) return;
+        if (!openingEnabled() || state.opened()) return;
         long now = System.currentTimeMillis();
         try {
+            state.startOpeningIfComplete(now, Math.max(1, getConfig().getInt("end-opening.countdown-seconds", 300)));
+            if (state.openingAt() == 0) return;
             if (state.openIfDue(now)) {
                 if (openingBar != null) forPlayers(player -> player.hideBossBar(openingBar));
                 openingBar = null;
@@ -354,16 +472,34 @@ public final class EndPlugin extends JavaPlugin implements Listener {
             reminderBar = null;
             forPlayers(player -> player.hideBossBar(old));
         }
-        if (!openingEnabled() || state.firstFightComplete() || state.openingAt() != 0 && !state.opened()) return;
-        if (nextReminder == 0) nextReminder = now + 15 * 60_000L;
+        if (!sealsEnabled() || state.firstFightComplete() || state.openingAt() != 0 && !state.opened()) return;
+        int intervalMin = Math.max(1, getConfig().getInt("end-opening.reminder.interval-minutes", 15));
+        if (nextReminder == 0) nextReminder = now + intervalMin * 60_000L;
         if (now < nextReminder) return;
-        nextReminder = now + Math.max(1, getConfig().getInt("end-opening.reminder.interval-minutes", 15)) * 60_000L;
-        String message = state.opened() ? "Край открыт. Исследуйте центральный остров." : "Край запечатан: " + state.count() + "/6 печатей.";
+        sendReminder(null);
+    }
+
+    private void sendReminder(String customMessage) {
+        long now = System.currentTimeMillis();
+        if (reminderBar != null) {
+            BossBar old = reminderBar;
+            reminderBar = null;
+            forPlayers(player -> player.hideBossBar(old));
+        }
+        int intervalMin = Math.max(1, getConfig().getInt("end-opening.reminder.interval-minutes", 15));
+        nextReminder = now + intervalMin * 60_000L;
+        String message = (customMessage != null && !customMessage.isEmpty())
+            ? customMessage
+            : (state.opened()
+                ? "Край открыт. Исследуйте центральный остров."
+                : "Край запечатан: " + state.count() + "/6 печатей.");
         reminderBar = BossBar.bossBar(Component.text(message, NamedTextColor.LIGHT_PURPLE), 1, BossBar.Color.PURPLE, BossBar.Overlay.PROGRESS);
         reminderUntil = now + Math.max(1, getConfig().getInt("end-opening.reminder.bossbar-duration-seconds", 10)) * 1000L;
         forPlayers(player -> player.showBossBar(reminderBar));
-        if (getConfig().getBoolean("end-opening.reminder.send-chat-message", true))
-            announce(Component.text(message + " Открыть /end", NamedTextColor.LIGHT_PURPLE).clickEvent(ClickEvent.runCommand("/end")));
+        if (getConfig().getBoolean("end-opening.reminder.send-chat-message", true)) {
+            announce(Component.text(message + " · Открыть /end", NamedTextColor.LIGHT_PURPLE)
+                .clickEvent(ClickEvent.runCommand("/end")));
+        }
     }
 
     void announce(Component message) { forPlayers(player -> ((Audience) player).sendMessage(message)); }

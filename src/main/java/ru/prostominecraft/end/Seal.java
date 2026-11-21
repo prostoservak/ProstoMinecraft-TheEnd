@@ -8,8 +8,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.RecipeChoice;
-import org.bukkit.inventory.ShapedRecipe;
+import org.bukkit.inventory.ShapelessRecipe;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -31,6 +30,10 @@ enum Seal {
         this.ingredients = List.of(first, second);
     }
 
+    NamespacedKey recipeKey(EndPlugin plugin) {
+        return new NamespacedKey(plugin, "seal_" + name().toLowerCase());
+    }
+
     ItemStack item(EndPlugin plugin) {
         ItemStack item = new ItemStack(Material.ECHO_SHARD);
         ItemMeta meta = item.getItemMeta();
@@ -46,48 +49,42 @@ enum Seal {
     }
 
     void registerRecipe(EndPlugin plugin) {
-        ShapedRecipe recipe = new ShapedRecipe(new NamespacedKey(plugin, "seal_" + name().toLowerCase()), item(plugin));
+        ShapelessRecipe recipe = new ShapelessRecipe(recipeKey(plugin), item(plugin));
         switch (this) {
             case HEAT -> {
-                recipe.shape("BBM", "BTB", "MGM");
-                recipe.setIngredient('B', Material.BLAZE_ROD);
-                recipe.setIngredient('T', new RecipeChoice.MaterialChoice(Material.POTION));
-                recipe.setIngredient('M', Material.MAGMA_BLOCK);
-                recipe.setIngredient('G', Material.GHAST_TEAR);
+                recipe.addIngredient(4, Material.BLAZE_ROD);
+                recipe.addIngredient(1, Material.POTION);
+                recipe.addIngredient(3, Material.MAGMA_BLOCK);
+                recipe.addIngredient(1, Material.GHAST_TEAR);
             }
             case DEPTHS -> {
-                recipe.shape("KKD", "KHD", "KDD");
-                recipe.setIngredient('K', Material.GLOW_INK_SAC);
-                recipe.setIngredient('H', Material.HEART_OF_THE_SEA);
-                recipe.setIngredient('D', Material.DRIED_KELP_BLOCK);
+                recipe.addIngredient(4, Material.GLOW_INK_SAC);
+                recipe.addIngredient(1, Material.HEART_OF_THE_SEA);
+                recipe.addIngredient(4, Material.DRIED_KELP_BLOCK);
             }
             case DARKNESS -> {
-                recipe.shape("AAS", "ACA", "BBS");
-                recipe.setIngredient('A', Material.AMETHYST_SHARD);
-                recipe.setIngredient('S', Material.SCULK);
-                recipe.setIngredient('C', Material.COMPASS);
-                recipe.setIngredient('B', Material.GLOW_BERRIES);
+                recipe.addIngredient(4, Material.AMETHYST_SHARD);
+                recipe.addIngredient(2, Material.SCULK);
+                recipe.addIngredient(1, Material.COMPASS);
+                recipe.addIngredient(2, Material.GLOW_BERRIES);
             }
             case BREEZE -> {
-                recipe.shape("RRC", "RKC", "RCC");
-                recipe.setIngredient('R', Material.BREEZE_ROD);
-                recipe.setIngredient('K', Material.TRIAL_KEY);
-                recipe.setIngredient('C', Material.COPPER_BLOCK);
+                recipe.addIngredient(4, Material.BREEZE_ROD);
+                recipe.addIngredient(1, Material.TRIAL_KEY);
+                recipe.addIngredient(4, Material.COPPER_BLOCK);
             }
             case LIFE -> {
-                recipe.shape("MHM", "AEK", "MCM");
-                recipe.setIngredient('M', Material.MOSS_BLOCK);
-                recipe.setIngredient('H', Material.HONEY_BOTTLE);
-                recipe.setIngredient('A', Material.GOLDEN_APPLE);
-                recipe.setIngredient('E', Material.EMERALD_BLOCK);
-                recipe.setIngredient('K', Material.CAKE);
-                recipe.setIngredient('C', Material.GOLDEN_CARROT);
+                recipe.addIngredient(4, Material.MOSS_BLOCK);
+                recipe.addIngredient(1, Material.HONEY_BOTTLE);
+                recipe.addIngredient(1, Material.GOLDEN_APPLE);
+                recipe.addIngredient(1, Material.EMERALD_BLOCK);
+                recipe.addIngredient(1, Material.CAKE);
+                recipe.addIngredient(1, Material.GOLDEN_CARROT);
             }
             case THRESHOLD -> {
-                recipe.shape("OOP", "OCP", "OPP");
-                recipe.setIngredient('O', Material.ENDER_EYE);
-                recipe.setIngredient('C', Material.ENDER_CHEST);
-                recipe.setIngredient('P', Material.PHANTOM_MEMBRANE);
+                recipe.addIngredient(4, Material.ENDER_EYE);
+                recipe.addIngredient(1, Material.ENDER_CHEST);
+                recipe.addIngredient(4, Material.PHANTOM_MEMBRANE);
             }
         }
         Bukkit.addRecipe(recipe);

@@ -112,7 +112,7 @@ final class EndState {
         if (opened || submitted.containsKey(seal)) return false;
         submitted.put(seal, new Submission(player, name));
         long oldOpeningAt = openingAt;
-        if (submitted.size() == Seal.values().length) openingAt = now + countdownSeconds * 1000L;
+        if (submitted.size() == Seal.values().length && countdownSeconds > 0) openingAt = now + countdownSeconds * 1000L;
         try { save(); }
         catch (IOException error) {
             submitted.remove(seal);
@@ -127,6 +127,14 @@ final class EndState {
         opened = true;
         try { save(); }
         catch (IOException error) { opened = false; throw error; }
+        return true;
+    }
+
+    synchronized boolean startOpeningIfComplete(long now, int countdownSeconds) throws IOException {
+        if (opened || openingAt != 0 || submitted.size() != Seal.values().length || countdownSeconds <= 0) return false;
+        openingAt = now + countdownSeconds * 1000L;
+        try { save(); }
+        catch (IOException error) { openingAt = 0; throw error; }
         return true;
     }
 
