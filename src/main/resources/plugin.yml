@@ -1,5 +1,5 @@
 name: ProstoMinecraft-End
-version: '1.0.6-lore-test'
+version: '1.0.7-dialogue-test'
 main: ru.prostominecraft.end.EndPlugin
 api-version: '26.3'
 folia-supported: true
