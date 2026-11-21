@@ -26,6 +26,8 @@ import org.bukkit.event.player.PlayerBedEnterEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.NamespacedKey;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 
 final class EndSeepage implements Listener {
     private final EndPlugin plugin;
@@ -89,6 +91,11 @@ final class EndSeepage implements Listener {
         nextRift.put(id, now + 90_000L + ThreadLocalRandom.current().nextLong(60_000L));
         if (player.getWorld().getTime() < 13000 || player.getWorld().getTime() > 23000) return;
         Location origin = player.getLocation();
+        PotionEffect oldVision = player.getPotionEffect(PotionEffectType.NIGHT_VISION);
+        if (oldVision == null || oldVision.getDuration() < 240)
+            player.addPotionEffect(new PotionEffect(PotionEffectType.NIGHT_VISION, 240, 0, true, false, false));
+        player.playSound(origin, Sound.BLOCK_END_PORTAL_SPAWN, 0.5f, 1.5f);
+        player.spawnParticle(Particle.REVERSE_PORTAL, origin.clone().add(0, 1, 0), 50, 1.2, 0.8, 1.2, 0.12);
         Location at = origin.clone().add(ThreadLocalRandom.current().nextInt(-8, 9), 0, ThreadLocalRandom.current().nextInt(-8, 9));
         Bukkit.getRegionScheduler().run(plugin, at, task -> {
             int y = at.getWorld().getHighestBlockYAt(at.getBlockX(), at.getBlockZ());

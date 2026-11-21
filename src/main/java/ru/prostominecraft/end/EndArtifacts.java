@@ -107,8 +107,10 @@ final class EndArtifacts implements Listener {
             Vector direction = origin.getDirection().normalize().multiply(2.20);
             player.setVelocity(direction.add(new Vector(0, 0.42, 0)));
             player.getWorld().playSound(origin, Sound.ENTITY_BREEZE_JUMP, 1.1f, 0.85f);
+            player.getWorld().playSound(origin, Sound.ENTITY_ENDER_DRAGON_FLAP, 1.3f, 1.4f);
             player.getWorld().spawnParticle(Particle.SWEEP_ATTACK, origin.clone().add(0, 1.0, 0), 4, 0.9, 0.4, 0.9, 0);
-            player.getWorld().spawnParticle(Particle.DRAGON_BREATH, origin.clone().add(0, 0.8, 0), 22, 0.8, 0.4, 0.8, 0.05);
+            player.getWorld().spawnParticle(Particle.DRAGON_BREATH, origin.clone().add(0, 0.8, 0), 22, 0.8, 0.4, 0.8, 0.05, 1.0f);
+            player.getWorld().spawnParticle(Particle.GUST, origin.clone().add(0, 1, 0), 3, 0.6, 0.4, 0.6, 0);
             // Launch AoE wind slash (5 HP + knockback in 3.5 blocks)
             for (Entity nearby : player.getNearbyEntities(3.5, 3.0, 3.5)) {
                 if (nearby == player || !(nearby instanceof LivingEntity living) || living.isDead()) continue;
@@ -141,7 +143,9 @@ final class EndArtifacts implements Listener {
             Vector direction = origin.getDirection().normalize().multiply(1.85);
             player.setVelocity(direction.add(new Vector(0, 0.38, 0)));
             player.getWorld().playSound(origin, Sound.ENTITY_BREEZE_JUMP, 1.0f, 1.0f);
+            player.getWorld().playSound(origin, Sound.ENTITY_ENDER_DRAGON_FLAP, 0.9f, 1.65f);
             player.getWorld().spawnParticle(Particle.CLOUD, origin.clone().add(0, 0.5, 0), 16, 0.4, 0.2, 0.4, 0.08);
+            player.getWorld().spawnParticle(Particle.SWEEP_ATTACK, origin.clone().add(0, 1, 0), 3, 0.5, 0.3, 0.5, 0);
             ((Audience) player).sendActionBar(Component.text("Коготь дракона", NamedTextColor.LIGHT_PURPLE));
         }
     }
@@ -186,9 +190,10 @@ final class EndArtifacts implements Listener {
         for (double d = 1.0; d <= beamLength; d += 0.65) {
             Location point = eye.clone().add(dir.clone().multiply(d));
             if (Bukkit.isOwnedByCurrentRegion(world, point.getBlockX() >> 4, point.getBlockZ() >> 4)) {
-                world.spawnParticle(upgraded ? Particle.END_ROD : Particle.DRAGON_BREATH, point, 1, 0.04, 0.04, 0.04, 0);
+                if (upgraded) world.spawnParticle(Particle.END_ROD, point, 3, 0.04, 0.04, 0.04, 0);
+                else world.spawnParticle(Particle.DRAGON_BREATH, point, 3, 0.04, 0.04, 0.04, 0, 1.0f);
                 if (upgraded && ((int) (d * 2)) % 3 == 0) {
-                    world.spawnParticle(Particle.DRAGON_BREATH, point, 1, 0.05, 0.05, 0.05, 0.01);
+                    world.spawnParticle(Particle.DRAGON_BREATH, point, 2, 0.05, 0.05, 0.05, 0.01, 1.0f);
                 }
             }
             for (Entity entity : candidates) {
@@ -212,6 +217,7 @@ final class EndArtifacts implements Listener {
 
         world.playSound(eye, Sound.ENTITY_GUARDIAN_ATTACK, 1.0f, upgraded ? 1.45f : 1.25f);
         world.playSound(eye, Sound.ENTITY_ENDER_EYE_DEATH, 0.8f, 1.3f);
+        world.spawnParticle(Particle.FLASH, eye.clone().add(dir.clone().multiply(1.2)), 1, 0, 0, 0, 0);
 
         // Instantly shatter any End Crystals on the beam (credits EndFight via onCrystalShattered!)
         for (EnderCrystal crystal : orderedCrystals) {
@@ -244,6 +250,8 @@ final class EndArtifacts implements Listener {
                 living.damage(dmg, player);
                 living.addPotionEffect(new PotionEffect(PotionEffectType.GLOWING, glowingTicks, 0));
                 living.getWorld().spawnParticle(Particle.WITCH, living.getLocation().add(0, 1.0, 0), 14, 0.35, 0.5, 0.35, 0.05);
+                living.getWorld().spawnParticle(Particle.END_ROD, living.getLocation().add(0, 1.0, 0), 22, 0.5, 0.7, 0.5, 0.04);
+                living.getWorld().playSound(living.getLocation(), Sound.BLOCK_AMETHYST_BLOCK_BREAK, 1.2f, 1.25f);
             }, () -> {});
         }
 
@@ -373,6 +381,8 @@ final class EndArtifacts implements Listener {
         player.getPersistentDataContainer().set(falling, PersistentDataType.BYTE, (byte) 1);
 
         Location from = player.getLocation();
+        world.spawnParticle(Particle.REVERSE_PORTAL, from, 55, 0.5, 0.9, 0.5, 0.18);
+        world.playSound(from, Sound.ENTITY_ENDERMAN_TELEPORT, 1.4f, 0.7f);
         double targetX = from.getX();
         double targetZ = from.getZ();
         int baseY = upgraded ? 125 : 100;
@@ -405,6 +415,8 @@ final class EndArtifacts implements Listener {
             }
             player.getWorld().playSound(player.getLocation(), Sound.ITEM_TOTEM_USE, 0.7f, 1.35f);
             player.getWorld().spawnParticle(Particle.END_ROD, player.getLocation().add(0, 1, 0), 30, 0.6, 0.8, 0.6, 0.08);
+            player.getWorld().spawnParticle(Particle.REVERSE_PORTAL, player.getLocation().add(0, 1, 0), 65, 0.8, 1.0, 0.8, 0.1);
+            player.getWorld().playSound(player.getLocation(), Sound.BLOCK_BEACON_ACTIVATE, 1.0f, 1.5f);
             ((Audience) player).sendActionBar(Component.text(
                 upgraded ? "Усиленная небесная петля вытащила Вас из пустоты" : "Небесная петля спасла Вас от пустоты",
                 upgraded ? NamedTextColor.BLUE : NamedTextColor.AQUA));

@@ -32,7 +32,6 @@ import org.bukkit.entity.EnderCrystal;
 import org.bukkit.entity.EnderDragon;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
-import org.bukkit.entity.Phantom;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Projectile;
 import org.bukkit.entity.Shulker;
@@ -47,6 +46,8 @@ import org.bukkit.event.entity.EntityPlaceEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.projectiles.ProjectileSource;
 import org.bukkit.util.RayTraceResult;
 import org.bukkit.util.Vector;
@@ -161,6 +162,7 @@ final class EndFight implements Listener {
     @EventHandler
     public void onDragonAdded(EntityAddToWorldEvent event) {
         if (!(event.getEntity() instanceof EnderDragon dragon) || !state.opened() || state.corrupt()) return;
+        if (dragon.getPersistentDataContainer().has(mirageCopyKey, PersistentDataType.BYTE)) return;
         if (event.getWorld().getEnvironment() != World.Environment.THE_END) return;
         attach(dragon);
     }
@@ -202,7 +204,7 @@ final class EndFight implements Listener {
                 }
             }
             resetBossMechanicFlags();
-            configure(dragon, !freshEncounter);
+            configure(dragon, state.firstFightComplete() && !freshEncounter);
             if (freshEncounter || !state.firstFightComplete()) {
                 setupWaveArena(dragon.getWorld(), kind());
             }
@@ -279,7 +281,7 @@ final class EndFight implements Listener {
 
         // Mirage real-dragon glowing purple trail when copies exist (visual distinguisher)
         if (current == DragonKind.MIRAGE && !mirageCopies.isEmpty()) {
-            world.spawnParticle(Particle.DRAGON_BREATH, dragon.getLocation(), 24, 2.5, 1.5, 2.5, 0.04);
+            world.spawnParticle(Particle.DRAGON_BREATH, dragon.getLocation(), 24, 2.5, 1.5, 2.5, 0.04, 1.0f);
             world.spawnParticle(Particle.REVERSE_PORTAL, dragon.getLocation(), 20, 2.0, 1.5, 2.0, 0.08);
         }
         if (current == DragonKind.MIRAGE && mirageGroundedUntil > 0 && now < mirageGroundedUntil) {
@@ -338,14 +340,19 @@ final class EndFight implements Listener {
             World world = dragon.getWorld();
             broadcastToArena(near, Component.text("Бастион готовит сейсмический удар — прыгайте или поднимите щит!", NamedTextColor.RED));
             world.playSound(impact, Sound.ENTITY_ENDER_DRAGON_GROWL, 2.5f, 0.6f);
-            world.spawnParticle(Particle.CLOUD, impact, 35, 3.0, 1.5, 3.0, 0.08);
+            world.spawnParticle(Particle.CLOUD, impact, 90, 5.0, 2.0, 5.0, 0.08);
+            world.spawnParticle(Particle.EXPLOSION, impact, 8, 3.0, 1.0, 3.0, 0);
+            for (var entry : near) sendActionBar(entry.getKey(), Component.text("УДАР ЧЕРЕЗ 2 СЕКУНДЫ", NamedTextColor.GOLD));
             dragon.getScheduler().runDelayed(plugin, task -> {
                 if (!dragon.isValid() || dragon.isDead()) return;
                 Location groundCenter = dragon.getLocation().clone();
                 Bukkit.getRegionScheduler().run(plugin, groundCenter, rtask -> {
                     int y = world.getHighestBlockYAt(groundCenter.getBlockX(), groundCenter.getBlockZ());
                     groundCenter.setY(Math.max(58, y + 1));
-                    world.playSound(groundCenter, Sound.ENTITY_GENERIC_EXPLODE, 2.2f, 0.65f);
+                    world.playSound(groundCenter, Sound.ENTITY_GENERIC_EXPLODE, 3.5f, 0.55f);
+                    world.playSound(groundCenter, Sound.ENTITY_WARDEN_SONIC_BOOM, 3.0f, 0.55f);
+                    world.spawnParticle(Particle.EXPLOSION_EMITTER, groundCenter, 3, 1.5, 0.3, 1.5, 0);
+                    world.spawnParticle(Particle.SONIC_BOOM, groundCenter.clone().add(0, 1.0, 0), 5, 2.0, 0.3, 2.0, 0);
                     // Expanding ground particle ring
                     for (int step = 1; step <= 4; step++) {
                         final double rad = step * 4.0;
@@ -353,8 +360,11 @@ final class EndFight implements Listener {
                             for (int a = 0; a < 36; a++) {
                                 double ang = (2 * Math.PI * a) / 36.0;
                                 Location p = groundCenter.clone().add(Math.cos(ang) * rad, 0.3, Math.sin(ang) * rad);
-                                world.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE, p, 1, 0.1, 0.1, 0.1, 0.01);
-                                world.spawnParticle(Particle.CRIT, p, 1, 0.15, 0.1, 0.15, 0.05);
+                                Bukkit.getRegionScheduler().run(plugin, p, visual -> {
+                                    world.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE, p, 5, 0.2, 0.3, 0.2, 0.02);
+                                    world.spawnParticle(Particle.CRIT, p, 4, 0.2, 0.2, 0.2, 0.05);
+                                    world.spawnParticle(Particle.EXPLOSION, p, 1, 0, 0, 0, 0);
+                                });
                             }
                         }, step * 2L);
                     }
@@ -388,7 +398,7 @@ final class EndFight implements Listener {
                             double ang = (2 * Math.PI * a) / 18.0;
                             world.spawnParticle(Particle.FLAME, ring.clone().add(Math.cos(ang) * 3.0, 0.1, Math.sin(ang) * 3.0), 1, 0, 0, 0, 0);
                         }
-                    }, pulse * 10L);
+                    }, 1L + pulse * 10L);
                 }
                 Bukkit.getRegionScheduler().runDelayed(plugin, strike, rtask -> {
                     int y = world.getHighestBlockYAt(strike.getBlockX(), strike.getBlockZ());
@@ -511,7 +521,7 @@ final class EndFight implements Listener {
                     dragon.getScheduler().runDelayed(plugin, t -> drawParticleLine(world,
                         new Location(world, posA.x, posA.y + 1.2, posA.z),
                         new Location(world, posB.x, posB.y + 1.2, posB.z),
-                        Particle.WITCH, 18), () -> {}, step * 18L);
+                        Particle.WITCH, 18), () -> {}, 1L + step * 18L);
                 }
                 dragon.getScheduler().runDelayed(plugin, t -> {
                     Player curA = Bukkit.getPlayer(aId);
@@ -560,13 +570,13 @@ final class EndFight implements Listener {
                             }
                         }
                     }
-                }, () -> {}, tick * 5L);
+                }, () -> {}, 1L + tick * 5L);
             }
             // Detonate after 2.5s
             dragon.getScheduler().runDelayed(plugin, t -> {
                 Bukkit.getRegionScheduler().run(plugin, vortex, rt -> {
                     world.playSound(vortex, Sound.ENTITY_GENERIC_EXPLODE, 1.8f, 1.3f);
-                    world.spawnParticle(Particle.DRAGON_BREATH, vortex, 55, 2.2, 1.0, 2.2, 0.12);
+                    world.spawnParticle(Particle.DRAGON_BREATH, vortex, 55, 2.2, 1.0, 2.2, 0.12, 1.0f);
                 });
                 for (var e : activePlayers()) {
                     double dx = e.getValue().x - vortex.getX();
@@ -574,6 +584,47 @@ final class EndFight implements Listener {
                     if (dx * dx + dz * dz <= 4.8 * 4.8) {
                         damagePlayer(e.getKey(), 7.0, 0.3, "Взрыв Хорус-стяжки", NamedTextColor.DARK_PURPLE);
                     }
+                }
+            }, () -> {}, 50L);
+        }
+        // Echo rupture: three visible false targets, then one real detonation.
+        if (seconds % 26 == 8) {
+            PlayerPosition target = near.get(ThreadLocalRandom.current().nextInt(near.size())).getValue();
+            World world = dragon.getWorld();
+            Location center = new Location(world, target.x, target.y + 0.4, target.z);
+            broadcastToArena(near, Component.text("Мираж раскалывает пространство! Покиньте фиолетовый круг!", NamedTextColor.LIGHT_PURPLE));
+            for (var entry : near) {
+                Player player = Bukkit.getPlayer(entry.getKey());
+                if (player != null) player.getScheduler().run(plugin, t -> {
+                    if (player.getWorld().getEnvironment() != World.Environment.THE_END) return;
+                    PotionEffect old = player.getPotionEffect(PotionEffectType.NIGHT_VISION);
+                    if (old == null || old.getDuration() < 240)
+                        player.addPotionEffect(new PotionEffect(PotionEffectType.NIGHT_VISION, 240, 0, true, false, false));
+                    player.playSound(player.getLocation(), Sound.BLOCK_END_PORTAL_SPAWN, 0.55f, 1.4f);
+                }, () -> {});
+            }
+            for (int pulse = 0; pulse < 4; pulse++) {
+                final int charge = pulse;
+                dragon.getScheduler().runDelayed(plugin, t -> Bukkit.getRegionScheduler().run(plugin, center, rt -> {
+                    world.playSound(center, Sound.BLOCK_RESPAWN_ANCHOR_CHARGE, 2.0f, 0.7f + charge * 0.15f);
+                    for (int i = 0; i < 40; i++) {
+                        double angle = i * Math.PI / 20.0;
+                        Location edge = center.clone().add(Math.cos(angle) * 5.0, 0.2, Math.sin(angle) * 5.0);
+                        Bukkit.getRegionScheduler().run(plugin, edge, visual ->
+                            world.spawnParticle(Particle.REVERSE_PORTAL, edge, 3, 0.1, 0.3, 0.1, 0.03));
+                    }
+                    world.spawnParticle(Particle.DRAGON_BREATH, center, 25, 2.0, 0.4, 2.0, 0.04, 1.0f);
+                }), () -> {}, 1L + pulse * 10L);
+            }
+            dragon.getScheduler().runDelayed(plugin, t -> {
+                Bukkit.getRegionScheduler().run(plugin, center, rt -> {
+                    world.playSound(center, Sound.ENTITY_ENDER_DRAGON_SHOOT, 3.0f, 0.65f);
+                    world.spawnParticle(Particle.EXPLOSION_EMITTER, center, 2, 1.0, 0.2, 1.0, 0);
+                    world.spawnParticle(Particle.DRAGON_BREATH, center, 120, 3.0, 1.0, 3.0, 0.12, 1.0f);
+                });
+                for (var e : activePlayers()) {
+                    double dx = e.getValue().x - center.getX(), dz = e.getValue().z - center.getZ();
+                    if (dx * dx + dz * dz <= 25.0) damagePlayer(e.getKey(), 6.0, 0.4, "Разлом Миража", NamedTextColor.LIGHT_PURPLE);
                 }
             }, () -> {}, 50L);
         }
@@ -588,17 +639,17 @@ final class EndFight implements Listener {
             double ang = (i == 0 ? 1 : -1) * Math.PI * 0.6;
             Location spawnLoc = base.clone().add(Math.cos(ang) * 18, 4, Math.sin(ang) * 18);
             Bukkit.getRegionScheduler().run(plugin, spawnLoc, rtask -> {
-                Phantom copy = (Phantom) world.spawnEntity(spawnLoc, EntityType.PHANTOM);
-                copy.setSize(10);
+                EnderDragon copy = world.spawn(spawnLoc, EnderDragon.class, spawned ->
+                    spawned.getPersistentDataContainer().set(mirageCopyKey, PersistentDataType.BYTE, (byte) 1));
                 copy.customName(Component.text(DragonKind.MIRAGE.title, DragonKind.MIRAGE.color));
                 copy.setCustomNameVisible(true);
-                copy.getPersistentDataContainer().set(mirageCopyKey, PersistentDataType.BYTE, (byte) 1);
                 var hp = copy.getAttribute(Attribute.MAX_HEALTH);
                 if (hp != null) {
                     hp.setBaseValue(40.0);
                     copy.setHealth(40.0);
                 }
                 mirageCopies.add(copy.getUniqueId());
+                copy.setPhase(EnderDragon.Phase.CIRCLING);
                 // Dull smoke trail distinguishes copies from the real dragon's bright purple aura
                 copy.getScheduler().runAtFixedRate(plugin, ct -> {
                     if (!copy.isValid() || copy.isDead() || !mirageCopies.contains(copy.getUniqueId())) {
@@ -660,7 +711,7 @@ final class EndFight implements Listener {
                             }, () -> {});
                         }
                     }
-                }, () -> {}, pulse * 18L);
+                }, () -> {}, Math.max(1L, pulse * 18L));
             }
             dragon.getScheduler().runDelayed(plugin, t -> {
                 List<Map.Entry<UUID, PlayerPosition>> current = activePlayers();
@@ -704,13 +755,13 @@ final class EndFight implements Listener {
             World world = dragon.getWorld();
             broadcastToArena(near, Component.text("Венец Края запускает Луч маяка! Бегите по кругу или прячьтесь за башнями!", NamedTextColor.AQUA));
             double startAngle = ThreadLocalRandom.current().nextDouble(Math.PI * 2);
-            Location origin = new Location(world, 0.5, 86.0, 0.5);
+            Location origin = new Location(world, 0.5, 68.0, 0.5);
             for (int step = 0; step < 12; step++) {
                 final double angle = startAngle + step * (Math.PI / 6.0);
                 dragon.getScheduler().runDelayed(plugin, t -> {
                     if (!dragon.isValid() || dragon.isDead() || crownShielded) return;
-                    Location target = new Location(world, Math.cos(angle) * 52.0, 62.0, Math.sin(angle) * 52.0);
-                    drawParticleLine(world, origin, target, Particle.END_ROD, 28);
+                    Location target = new Location(world, Math.cos(angle) * 52.0, 68.0, Math.sin(angle) * 52.0);
+                    drawBeaconRay(world, origin, target);
                     for (var entry : activePlayers()) {
                         PlayerPosition p = entry.getValue();
                         // Distance from player to beam segment in XZ
@@ -723,8 +774,38 @@ final class EndFight implements Listener {
                             hitBeaconBeam(entry.getKey(), origin);
                         }
                     }
-                }, () -> {}, step * 10L);
+                }, () -> {}, 1L + step * 10L);
             }
+        }
+        // Crownfall: a marked player must leave the impact circle before the crystal burst.
+        if (seconds % 30 == 20) {
+            PlayerPosition target = near.get(ThreadLocalRandom.current().nextInt(near.size())).getValue();
+            World world = dragon.getWorld();
+            Location center = new Location(world, target.x, target.y + 0.4, target.z);
+            broadcastToArena(near, Component.text("Венец призывает падение кристалла! Уходите от голубого круга!", NamedTextColor.AQUA));
+            for (int pulse = 0; pulse < 5; pulse++) {
+                final int charge = pulse;
+                dragon.getScheduler().runDelayed(plugin, t -> Bukkit.getRegionScheduler().run(plugin, center, rt -> {
+                    world.playSound(center, Sound.BLOCK_AMETHYST_BLOCK_CHIME, 2.0f, 0.6f + charge * 0.2f);
+                    for (int i = 0; i < 48; i++) {
+                        double angle = i * Math.PI / 24.0;
+                        Location edge = center.clone().add(Math.cos(angle) * 6.0, 0.2, Math.sin(angle) * 6.0);
+                        Bukkit.getRegionScheduler().run(plugin, edge, visual ->
+                            world.spawnParticle(Particle.END_ROD, edge, 3, 0.1, 0.2, 0.1, 0.01));
+                    }
+                }), () -> {}, 1L + pulse * 10L);
+            }
+            dragon.getScheduler().runDelayed(plugin, t -> {
+                Bukkit.getRegionScheduler().run(plugin, center, rt -> {
+                    world.playSound(center, Sound.ENTITY_WARDEN_SONIC_BOOM, 3.0f, 1.35f);
+                    world.spawnParticle(Particle.SONIC_BOOM, center.clone().add(0, 1, 0), 10, 2.5, 0.4, 2.5, 0);
+                    world.spawnParticle(Particle.ELECTRIC_SPARK, center, 110, 3.5, 2.0, 3.5, 0.15);
+                });
+                for (var e : activePlayers()) {
+                    double dx = e.getValue().x - center.getX(), dz = e.getValue().z - center.getZ();
+                    if (dx * dx + dz * dz <= 36.0) damagePlayer(e.getKey(), 9.0, 0.3, "Падение кристалла", NamedTextColor.AQUA);
+                }
+            }, () -> {}, 60L);
         }
     }
 
@@ -1062,9 +1143,10 @@ final class EndFight implements Listener {
         broadcastToArena(activePlayers(), Component.text(event.getPlayer().getName() + " разрушил Резонатор! Кристалл на башне уязвим!", NamedTextColor.AQUA));
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = false)
     public void onMirageCopyHit(EntityDamageByEntityEvent event) {
-        if (!(event.getEntity() instanceof Phantom copy)) return;
+        EnderDragon copy = resolveDragon(event.getEntity());
+        if (copy == null) return;
         if (!copy.getPersistentDataContainer().has(mirageCopyKey, PersistentDataType.BYTE)) return;
         event.setCancelled(true);
         mirageCopies.remove(copy.getUniqueId());
@@ -1140,6 +1222,10 @@ final class EndFight implements Listener {
     public void onDragonDamage(EntityDamageEvent event) {
         EnderDragon dragon = resolveDragon(event.getEntity());
         if (dragon == null || !state.opened() || state.corrupt()) return;
+        if (dragon.getPersistentDataContainer().has(mirageCopyKey, PersistentDataType.BYTE)) {
+            event.setCancelled(true);
+            return;
+        }
         if (transitioning.containsKey(dragon.getUniqueId())) {
             event.setCancelled(true);
             return;
@@ -1267,6 +1353,10 @@ final class EndFight implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onDragonDeath(EntityDeathEvent event) {
         if (!(event.getEntity() instanceof EnderDragon dragon) || !state.opened() || state.corrupt()) return;
+        if (dragon.getPersistentDataContainer().has(mirageCopyKey, PersistentDataType.BYTE)) {
+            event.getDrops().clear();
+            return;
+        }
         if (!state.firstFightComplete() && state.wave() < 2) return;
         cleanupArenaArtifacts(dragon.getWorld());
 
@@ -1433,6 +1523,22 @@ final class EndFight implements Listener {
             double frac = i / (double) Math.max(1, points);
             Location p = a.clone().add(delta.clone().multiply(frac));
             Bukkit.getRegionScheduler().run(plugin, p, t -> world.spawnParticle(particle, p, 1, 0.05, 0.05, 0.05, 0));
+        }
+    }
+
+    private void drawBeaconRay(World world, Location origin, Location target) {
+        Vector delta = target.toVector().subtract(origin.toVector());
+        for (int i = 0; i <= 52; i++) {
+            final int pointIndex = i;
+            Location base = origin.clone().add(delta.clone().multiply(i / 52.0));
+            Bukkit.getRegionScheduler().run(plugin, base, task -> {
+                for (int y = 0; y <= 12; y += 2) {
+                    Location point = base.clone().add(0, y, 0);
+                    world.spawnParticle(Particle.END_ROD, point, 5, 0.25, 0.3, 0.25, 0.01);
+                    if (y % 4 == 0) world.spawnParticle(Particle.ELECTRIC_SPARK, point, 2, 0.1, 0.2, 0.1, 0.01);
+                }
+                if (pointIndex % 8 == 0) world.playSound(base, Sound.BLOCK_BEACON_AMBIENT, 1.4f, 1.7f);
+            });
         }
     }
 
